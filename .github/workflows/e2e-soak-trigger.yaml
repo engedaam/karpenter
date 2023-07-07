@@ -1,13 +1,40 @@
 name: E2ESoakTrigger
 on:
   workflow_dispatch:
+    inputs:
+      git_ref:
+        type: string
+      suite:
+        default: Soak
+      k8s_version:
+        default: "1.27"
+      enable_cloudwatch:
+        type: boolean
+        default: false
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read  # This is required for actions/checkout
+  statuses: write
 jobs:
-  scale:
-    if: github.repository == 'aws/karpenter' || github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/e2e.yaml
-    with:
-      suite: Soak
-      event_name: ${{ github.event_name }}
-      region: "us-west-2"
-    secrets:
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+  soak:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ inputs.git_ref }}
+      - name: configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ vars.ACCOUNT_ID }}:role/${{ vars.ROLE_NAME }}
+          aws-region: us-west-2
+          role-duration-seconds: 21600
+      - name: create eks cluster Soak-testing
+        uses: ./.github/actions/e2e/create-cluster
+        with:
+          account_id: ${{ vars.ACCOUNT_ID }}
+          role: ${{ vars.ROLE_NAME }}
+          region: us-west-2
+          cluster_name: ${{ env.CLUSTER_NAME }}
+          k8s_version: ${{ inputs.k8s_version }}
+          ip_family: ${{ inputs.suite == 'IPv6' && 'IPv6' || 'IPv4' }} # Set the value to IPv6 if IPv6 suite, else IPv4
+          git_ref: ${{ inputs.git_ref }}
