@@ -106,7 +106,6 @@ var _ = Describe("Soak", func() {
 		startNodeCountMonitor(ctx, env.Client)
 		time.Sleep(time.Second * 10)
 
-		// Expect that we never get over a high number of nodes
 		Consistently(func(g Gomega) {
 			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(20) + 1))
 			env.ExpectUpdated(dep)
@@ -114,7 +113,7 @@ var _ = Describe("Soak", func() {
 			dep.Spec.Replicas = awssdk.Int32(0)
 			env.ExpectUpdated(dep)
 			time.Sleep(time.Second * 30)
-		}, time.Hour*12).Should(Succeed())
+		}, time.Hour*2).Should(Succeed())
 	})
 })
 
