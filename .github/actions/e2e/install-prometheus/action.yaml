@@ -7,9 +7,6 @@ inputs:
   role:
     description: "Role to access AWS"
     required: true
-  region:
-    description: "Region to access AWS"
-    required: true
   cluster_name:
     description: 'Name of the cluster to be launched by eksctl'
     required: true
