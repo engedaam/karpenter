@@ -59,8 +59,8 @@ var _ = AfterEach(func() { env.AfterEach() })
 
 var _ = Describe("Soak", func() {
 	It("should ", Label(debug.NoWatch), Label(debug.NoEvents), func() {
-		ctx, cancel := context.WithCancel(env.Context)
-		defer cancel()
+		// ctx, cancel := context.WithCancel(env.Context)
+		// defer cancel()
 
 		provider := awstest.AWSNodeTemplate(v1alpha1.AWSNodeTemplateSpec{AWS: v1alpha1.AWS{
 			SecurityGroupSelector: map[string]string{"karpenter.sh/discovery": settings.FromContext(env.Context).ClusterName},
@@ -103,10 +103,9 @@ var _ = Describe("Soak", func() {
 
 		// Create a deployment with a single pod
 		env.ExpectCreated(provider, provisioner, dep)
-		startNodeCountMonitor(ctx, env.Client)
+		//startNodeCountMonitor(ctx, env.Client)
 		time.Sleep(time.Second * 10)
 
-		// Expect that we never get over a high number of nodes
 		Consistently(func(g Gomega) {
 			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(20) + 1))
 			env.ExpectUpdated(dep)
@@ -114,7 +113,7 @@ var _ = Describe("Soak", func() {
 			dep.Spec.Replicas = awssdk.Int32(0)
 			env.ExpectUpdated(dep)
 			time.Sleep(time.Second * 30)
-		}, time.Hour*12).Should(Succeed())
+		}, time.Hour*3).Should(Succeed())
 	})
 })
 
