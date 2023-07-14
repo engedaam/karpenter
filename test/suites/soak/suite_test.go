@@ -110,9 +110,11 @@ var _ = Describe("Soak", func() {
 		time.Sleep(time.Second * 10)
 
 		Consistently(func(g Gomega) {
-			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(20) + 1))
+			env.ExpectExists(dep)
+			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(100) + 1))
 			env.ExpectUpdated(dep)
-			time.Sleep(time.Minute * 1)
+			time.Sleep(time.Minute * 5)
+			env.ExpectExists(dep)
 			dep.Spec.Replicas = awssdk.Int32(0)
 			env.ExpectUpdated(dep)
 			time.Sleep(time.Second * 30)
