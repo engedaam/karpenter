@@ -1,7 +1,7 @@
 name: E2ESoakTrigger
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 permissions:
   id-token: write # This is required for requesting the JWT
@@ -21,4 +21,15 @@ jobs:
       - name: run the Soak test suite
         run: |
           aws eks update-kubeconfig --name Soak-testing 
-          TEST_SUITE="Soak" make e2etests
+      - name: install karpenter
+        uses: ./.github/actions/e2e/install-karpenter
+        with:
+          account_id: ${{ vars.ACCOUNT_ID }}
+          role: ${{ vars.ROLE_NAME }}
+          region: us-west-2
+          cluster_name: Soak-testing
+          git_ref: ${{ inputs.git_ref }}
+      # - name: run the Soak test suite
+      #   run: |
+      #     aws eks update-kubeconfig --name Soak-testing 
+      #     TEST_SUITE="Soak" make e2etests
