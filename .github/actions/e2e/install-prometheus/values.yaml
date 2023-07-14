@@ -26,30 +26,14 @@ alertmanager:
     tolerations:
       - key: CriticalAddonsOnly
         operator: Exists
-kubelet:
-  serviceMonitor:
-    additionalLabels:
-      scrape: enabled
-prometheus:
-  prometheusSpec:
-    tolerations:
-      - key: CriticalAddonsOnly
-        operator: Exists
-    resources:
-      requests:
-        cpu: 1
-        memory: 5Gi
-      limits:
-        cpu: 1
-        memory: 5Gi
-    serviceMonitorSelector:
-      matchLabels:
-        scrape: enabled
-    serviceMonitorNamespaceSelector:
-      matchLabels:
-        scrape: enabled
-    remoteWrite:
-      - queueConfig:
-          maxSamplesPerSend: 1000
-          maxShards: 200
-          capacity: 2500
+extraScrapeConfigs: |
+    - job_name: karpenter
+      kubernetes_sd_configs:
+      - role: endpoints
+        namespaces:
+          names:
+          - karpenter
+      relabel_configs:
+      - source_labels: [__meta_kubernetes_endpoint_port_name]
+        regex: http-metrics
+        action: keep
