@@ -76,6 +76,7 @@ func (env *Environment) ExpectCleanCluster() {
 	var nodes v1.NodeList
 	Expect(env.Client.List(env.Context, &nodes)).To(Succeed())
 	for _, node := range nodes.Items {
+		fmt.Println(node.Name)
 		if len(node.Spec.Taints) == 0 && !node.Spec.Unschedulable {
 			Fail(fmt.Sprintf("expected system pool node %s to be tainted", node.Name))
 		}

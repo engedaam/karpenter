@@ -62,10 +62,14 @@ var _ = Describe("Soak", func() {
 		ctx, cancel := context.WithCancel(env.Context)
 		defer cancel()
 
+		//		content, err := os.ReadFile("testdata/user.sh")
+		//		Expect(err).NotTo(HaveOccurred())
 		provider := awstest.AWSNodeTemplate(v1alpha1.AWSNodeTemplateSpec{AWS: v1alpha1.AWS{
 			SecurityGroupSelector: map[string]string{"karpenter.sh/discovery": settings.FromContext(env.Context).ClusterName},
 			SubnetSelector:        map[string]string{"karpenter.sh/discovery": settings.FromContext(env.Context).ClusterName},
-		}})
+		},
+		//			UserData: awssdk.String(string(content)),
+		})
 		provisioner := test.Provisioner(test.ProvisionerOptions{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: "sock-test-provisioner",
@@ -110,11 +114,11 @@ var _ = Describe("Soak", func() {
 		time.Sleep(time.Second * 10)
 
 		Consistently(func(g Gomega) {
-			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(20) + 1))
-			env.ExpectUpdated(dep)
-			time.Sleep(time.Minute * 1)
+			dep.Spec.Replicas = awssdk.Int32(int32(rand.Intn(100) + 1))
+			env.ExpectCreatedOrUpdated(dep)
+			time.Sleep(time.Minute * 5)
 			dep.Spec.Replicas = awssdk.Int32(0)
-			env.ExpectUpdated(dep)
+			env.ExpectCreatedOrUpdated(dep)
 			time.Sleep(time.Second * 30)
 		}, time.Hour*2).Should(Succeed())
 		env.ExpectDeleted(provisioner, provider, dep)
