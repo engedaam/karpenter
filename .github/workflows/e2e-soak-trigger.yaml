@@ -1,15 +1,18 @@
 name: E2ESoakTrigger
 on:
   schedule:
-    - cron: '0 */3 * * *'
+    - cron: '0 */1 * * *'
   workflow_dispatch:
 permissions:
   id-token: write # This is required for requesting the JWT
   contents: read  # This is required for actions/checkout
   statuses: write
-jobs:
-  soak:
+jobs:       
+  resolve-cluster:
+    if: github.repository == 'aws/karpenter' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    outputs:
+      FOUND_CLUSTER: ${{ steps.resolve-step.outputs.FOUND_CLUSTER }}
     steps:
       - uses: actions/checkout@v3
       - name: configure aws credentials
@@ -18,7 +21,23 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.ACCOUNT_ID }}:role/${{ vars.ROLE_NAME }}
           aws-region: us-west-2
           role-duration-seconds: 21600
-      - name: run the Soak test suite
+      - uses: ./.github/actions/e2e/install-eksctl
+        with:
+          eksctl_version: v0.147.0
+      - name: find a valid cluster for soak testing
         run: |
-          aws eks update-kubeconfig --name Soak-testing 
-          TEST_SUITE="Soak" make e2etests
+          eksctl get cluster
+          eksctl get cluster | grep Soak-testing
+          search=$(eksctl get cluster | grep Soak-testing)
+          if [ 0 -eq ${#search} ] ; then echo "true" ; else echo "false" ; fi >> $GITHUB_OUTPUT
+  soak:
+    needs: [resolve-cluster]
+    if: github.repository == 'aws/karpenter' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      event_name: ${{ github.event_name }}
+      region: "us-west-2"
+      suite: "Soak"
+      create_cluster:  ${{ needs.resolve-git-ref.outputs.FOUND_CLUSTER }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
