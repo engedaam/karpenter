@@ -126,6 +126,7 @@ Resources:
             Resource: "*"
           - Effect: Allow
             Action:
+              - eks:ListClusters
               - eks:CreateCluster
               - eks:CreateAddon
               - eks:CreateNodegroup
