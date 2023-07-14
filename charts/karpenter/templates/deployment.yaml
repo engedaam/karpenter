@@ -66,6 +66,8 @@ spec:
           image: {{ include "karpenter.controller.image" . }}
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           env:
+            - name: ENABLE_PROFILING
+              value: "true"
             - name: KUBERNETES_MIN_VERSION
               value: "1.19.0-0"
             - name: KARPENTER_SERVICE
