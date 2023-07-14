@@ -37,7 +37,7 @@ runs:
     shell: bash
     run: |
       aws eks update-kubeconfig --name "${{ inputs.cluster_name }}"
-      helm upgrade --install karpenter oci://public.ecr.aws/karpenter/karpenter \
+      helm upgrade --install karpenter charts/karpenter \
         -n karpenter \
         --version v0.29.0 \
         --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="arn:aws:iam::${{ inputs.account_id }}:role/karpenter-irsa-${{ inputs.cluster_name }}" \
