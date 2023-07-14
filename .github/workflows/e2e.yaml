@@ -23,6 +23,7 @@ on:
           - Chaos
           - IPv6
           - Scale
+          - Soak
       k8s_version:
         type: choice
         options:
@@ -54,6 +55,9 @@ on:
       enable_metrics:
         type: boolean
         default: false
+      create_cluster:
+        type: string
+        default: "true"
     secrets:
       SLACK_WEBHOOK_URL:
         required: true
@@ -81,11 +85,13 @@ jobs:
           aws-region: ${{ inputs.region }}
           role-duration-seconds: 21600
       - name: generate cluster name
+        if: ${{ inputs.create_cluster }} == 'true'
         run: |
           CLUSTER_NAME=$(echo ${{ inputs.suite }}-$RANDOM$RANDOM | awk '{print tolower($0)}')
           echo "Using cluster name \"$CLUSTER_NAME\""
           echo CLUSTER_NAME=$CLUSTER_NAME >> $GITHUB_ENV
       - name: create eks cluster '${{ env.CLUSTER_NAME }}'
+        if: ${{ inputs.create_cluster }} == 'true'
         uses: ./.github/actions/e2e/create-cluster
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
@@ -96,6 +102,7 @@ jobs:
           ip_family: ${{ inputs.suite == 'IPv6' && 'IPv6' || 'IPv4' }} # Set the value to IPv6 if IPv6 suite, else IPv4
           git_ref: ${{ inputs.git_ref }}
       - name: install prometheus
+        if: ${{ inputs.create_cluster }} == 'true'
         uses: ./.github/actions/e2e/install-prometheus
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
@@ -105,6 +112,7 @@ jobs:
           workspace_id: ${{ vars.WORKSPACE_ID }}
           git_ref: ${{ inputs.git_ref }}
       - name: install karpenter
+        if: ${{ inputs.create_cluster }} == 'true'
         uses: ./.github/actions/e2e/install-karpenter
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
@@ -135,7 +143,7 @@ jobs:
           cluster_name: ${{ env.CLUSTER_NAME }}
       - name: cleanup karpenter and cluster '${{ env.CLUSTER_NAME }}' resources
         uses: ./.github/actions/e2e/cleanup
-        if: always()
+        if: always() && ${{ inputs.create_cluster }} == 'true'
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
           role: ${{ vars.ROLE_NAME }}
