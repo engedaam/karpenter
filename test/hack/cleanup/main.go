@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,6 +25,7 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
 	timestreamtypes "github.com/aws/aws-sdk-go-v2/service/timestreamwrite/types"
@@ -40,7 +42,9 @@ const (
 	karpenterMetricDatabase  = "karpenterTesting"
 	karpenterMetricTableName = "sweeperCleanedResources"
 
+	karpenterClusterNameTag     = "karpenter.sh/managed-by"
 	karpenterProvisionerNameTag = "karpenter.sh/provisioner-name"
+	karpenterNodePoolNameTag    = "karpenter.sh/nodepool-name"
 	karpenterLaunchTemplateTag  = "karpenter.k8s.aws/cluster"
 	karpenterSecurityGroupTag   = "karpenter.sh/discovery"
 	// TODO @joinnis: Remove this karpenterTestingTagLegacy field after running this cleanup script for a few days
@@ -49,6 +53,8 @@ const (
 	k8sClusterTag             = "cluster.k8s.amazonaws.com/name"
 	githubRunURLTag           = "github.com/run-url"
 )
+
+var clusterName = ""
 
 type CleanableResourceType interface {
 	Type() string
@@ -61,6 +67,9 @@ type MetricsClient interface {
 }
 
 func main() {
+	if len(os.Args) == 2 {
+		clusterName = os.Args[1]
+	}
 	ctx := context.Background()
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
@@ -78,13 +87,14 @@ func main() {
 
 	resources := []CleanableResourceType{
 		&eni{ec2Client: ec2Client},
-		&instance{ec2Client: ec2Client},
 		&securitygroup{ec2Client: ec2Client},
+		&instance{ec2Client: ec2Client},
 		&stack{cloudFormationClient: cloudFormationClient},
 		&launchtemplate{ec2Client: ec2Client},
 		&oidc{iamClient: iamClient},
 		&instanceProfile{iamClient: iamClient},
 	}
+
 	workqueue.ParallelizeUntil(ctx, len(resources), len(resources), func(i int) {
 		ids, err := resources[i].Get(ctx, expirationTime)
 		if err != nil {
@@ -114,18 +124,35 @@ func (i *instance) Type() string {
 
 func (i *instance) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("instance-state-name"),
+				Values: []string{string(ec2types.InstanceStateNameRunning)},
+			},
+			{
+				Name:   lo.ToPtr("tag-key"),
+				Values: []string{karpenterProvisionerNameTag, karpenterNodePoolNameTag},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("instance-state-name"),
+				Values: []string{string(ec2types.InstanceStateNameRunning)},
+			},
+			{
+				Name:   lo.ToPtr("tag:" + karpenterClusterNameTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := i.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("instance-state-name"),
-					Values: []string{string(ec2types.InstanceStateNameRunning)},
-				},
-				{
-					Name:   lo.ToPtr("tag-key"),
-					Values: []string{karpenterProvisionerNameTag},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -134,11 +161,10 @@ func (i *instance) Get(ctx context.Context, expirationTime time.Time) (ids []str
 
 		for _, res := range out.Reservations {
 			for _, instance := range res.Instances {
-				if _, found := lo.Find(instance.Tags, func(t ec2types.Tag) bool {
-					return lo.FromPtr(t.Key) == "kubernetes.io/cluster/KITInfrastructure"
-				}); !found && lo.FromPtr(instance.LaunchTime).Before(expirationTime) {
-					ids = append(ids, lo.FromPtr(instance.InstanceId))
+				if clusterName == "" && !lo.FromPtr(instance.LaunchTime).Before(expirationTime) {
+					continue
 				}
+				ids = append(ids, lo.FromPtr(instance.InstanceId))
 			}
 		}
 
@@ -171,14 +197,27 @@ func (sg *securitygroup) Type() string {
 
 func (sg *securitygroup) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("group-name"),
+				Values: []string{"security-group-drift"},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + karpenterSecurityGroupTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := sg.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("group-name"),
-					Values: []string{"security-group-drift"},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -186,17 +225,21 @@ func (sg *securitygroup) Get(ctx context.Context, expirationTime time.Time) (ids
 		}
 
 		for _, sgroup := range out.SecurityGroups {
-			creationDate, found := lo.Find(sgroup.Tags, func(tag ec2types.Tag) bool {
-				return *tag.Key == "creation-date"
-			})
-			if !found {
-				continue
-			}
-			time, err := time.Parse(time.RFC3339, *creationDate.Value)
-			if err != nil {
-				continue
-			}
-			if time.Before(expirationTime) {
+			if clusterName == "" {
+				creationDate, found := lo.Find(sgroup.Tags, func(tag ec2types.Tag) bool {
+					return *tag.Key == "creation-date"
+				})
+				if !found {
+					continue
+				}
+				time, err := time.Parse(time.RFC3339, *creationDate.Value)
+				if err != nil {
+					continue
+				}
+				if time.Before(expirationTime) {
+					ids = append(ids, lo.FromPtr(sgroup.GroupId))
+				}
+			} else {
 				ids = append(ids, lo.FromPtr(sgroup.GroupId))
 			}
 		}
@@ -236,6 +279,9 @@ func (s *stack) Type() string {
 
 func (s *stack) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
 	var nextToken *string
+	if clusterName != "" {
+		return []string{fmt.Sprintf("iam-%s", clusterName), fmt.Sprintf("eksctl-%s-cluster", clusterName)}, nil
+	}
 	for {
 		out, err := s.cloudFormationClient.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{
 			NextToken: nextToken,
@@ -292,14 +338,26 @@ func (lt *launchtemplate) Type() string {
 
 func (lt *launchtemplate) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag-key"),
+				Values: []string{karpenterLaunchTemplateTag},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + karpenterLaunchTemplateTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := lt.ec2Client.DescribeLaunchTemplates(ctx, &ec2.DescribeLaunchTemplatesInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("tag-key"),
-					Values: []string{karpenterLaunchTemplateTag},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -307,9 +365,10 @@ func (lt *launchtemplate) Get(ctx context.Context, expirationTime time.Time) (na
 		}
 
 		for _, launchTemplate := range out.LaunchTemplates {
-			if lo.FromPtr(launchTemplate.CreateTime).Before(expirationTime) {
-				names = append(names, lo.FromPtr(launchTemplate.LaunchTemplateName))
+			if clusterName == "" && !lo.FromPtr(launchTemplate.CreateTime).Before(expirationTime) {
+				continue
 			}
+			names = append(names, lo.FromPtr(launchTemplate.LaunchTemplateName))
 		}
 
 		nextToken = out.NextToken
@@ -421,6 +480,9 @@ func (ip *instanceProfile) Get(ctx context.Context, expirationTime time.Time) (n
 			if lo.FromPtr(t.Key) == karpenterTestingTag && out.InstanceProfiles[i].CreateDate.Add(time.Hour*24).Before(expirationTime) {
 				names = append(names, lo.FromPtr(out.InstanceProfiles[i].InstanceProfileName))
 			}
+			if lo.FromPtr(t.Key) == karpenterTestingTag && lo.FromPtr(t.Value) == clusterName {
+				names = append(names, lo.FromPtr(out.InstanceProfiles[i].InstanceProfileName))
+			}
 		}
 	}
 
@@ -458,14 +520,26 @@ func (e *eni) Type() string {
 
 func (e *eni) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag-key"),
+				Values: []string{k8sClusterTag},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + k8sClusterTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := e.ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("tag-key"),
-					Values: []string{k8sClusterTag},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -473,17 +547,21 @@ func (e *eni) Get(ctx context.Context, expirationTime time.Time) (ids []string, 
 		}
 
 		for _, ni := range out.NetworkInterfaces {
-			creationDate, found := lo.Find(ni.TagSet, func(tag ec2types.Tag) bool {
-				return *tag.Key == "node.k8s.amazonaws.com/createdAt"
-			})
-			if !found {
-				continue
-			}
-			time, err := time.Parse(time.RFC3339, *creationDate.Value)
-			if err != nil {
-				continue
-			}
-			if ni.Status == ec2types.NetworkInterfaceStatusAvailable && time.Before(expirationTime) {
+			if clusterName == "" {
+				creationDate, found := lo.Find(ni.TagSet, func(tag ec2types.Tag) bool {
+					return *tag.Key == "node.k8s.amazonaws.com/createdAt"
+				})
+				if !found {
+					continue
+				}
+				time, err := time.Parse(time.RFC3339, *creationDate.Value)
+				if err != nil {
+					continue
+				}
+				if ni.Status == ec2types.NetworkInterfaceStatusAvailable && time.Before(expirationTime) {
+					ids = append(ids, lo.FromPtr(ni.NetworkInterfaceId))
+				}
+			} else {
 				ids = append(ids, lo.FromPtr(ni.NetworkInterfaceId))
 			}
 		}
