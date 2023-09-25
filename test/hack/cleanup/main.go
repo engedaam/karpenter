@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,6 +25,7 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
 	timestreamtypes "github.com/aws/aws-sdk-go-v2/service/timestreamwrite/types"
@@ -54,6 +56,7 @@ type CleanableResourceType interface {
 	Type() string
 	Get(context.Context, time.Time) ([]string, error)
 	Cleanup(context.Context, []string) ([]string, error)
+	DeleteByClusterName(context.Context, string) error
 }
 
 type MetricsClient interface {
@@ -61,6 +64,10 @@ type MetricsClient interface {
 }
 
 func main() {
+	cluster_name := ""
+	if len(os.Args) != 0 {
+		cluster_name = os.Args[1]
+	}
 	ctx := context.Background()
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
@@ -73,18 +80,28 @@ func main() {
 	ec2Client := ec2.NewFromConfig(cfg)
 	cloudFormationClient := cloudformation.NewFromConfig(cfg)
 	iamClient := iam.NewFromConfig(cfg)
+	eksClient := eks.NewFromConfig(cfg)
 
 	metricsClient := MetricsClient(&timestream{timestreamClient: timestreamwrite.NewFromConfig(cfg, WithRegion(karpenterMetricRegion))})
 
 	resources := []CleanableResourceType{
 		&eni{ec2Client: ec2Client},
 		&instance{ec2Client: ec2Client},
+		&cluster{eksClient: eksClient},
 		&securitygroup{ec2Client: ec2Client},
 		&stack{cloudFormationClient: cloudFormationClient},
 		&launchtemplate{ec2Client: ec2Client},
 		&oidc{iamClient: iamClient},
 		&instanceProfile{iamClient: iamClient},
 	}
+	if cluster_name != "" {
+		for _, resource := range resources {
+			resource.DeleteByClusterName(ctx, cluster_name)
+			logger.With("type", resource.Type(), "cluster", cluster_name).Infof("deleted resources")
+		}
+		return
+	}
+
 	workqueue.ParallelizeUntil(ctx, len(resources), len(resources), func(i int) {
 		ids, err := resources[i].Get(ctx, expirationTime)
 		if err != nil {
@@ -161,6 +178,31 @@ func (i *instance) Cleanup(ctx context.Context, ids []string) ([]string, error) 
 	return ids, nil
 }
 
+func (i *instance) DeleteByClusterName(ctx context.Context, name string) error {
+	return nil
+}
+
+type cluster struct {
+	eksClient *eks.Client
+}
+
+func (c *cluster) Type() string {
+	return "Cluster"
+}
+
+func (c *cluster) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
+	return ids, nil
+}
+
+func (c *cluster) Cleanup(ctx context.Context, ids []string) ([]string, error) {
+	return []string{}, nil
+}
+
+func (c *cluster) DeleteByClusterName(ctx context.Context, name string) error {
+	_, err := c.eksClient.DeleteCluster(ctx, &eks.DeleteClusterInput{Name: lo.ToPtr(name)})
+	return err
+}
+
 type securitygroup struct {
 	ec2Client *ec2.Client
 }
@@ -226,6 +268,42 @@ func (sg *securitygroup) Cleanup(ctx context.Context, ids []string) ([]string, e
 	return deleted, errs
 }
 
+func (sg *securitygroup) DeleteByClusterName(ctx context.Context, name string) error {
+	var nextToken *string
+	var errs error
+	for {
+		out, err := sg.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr(karpenterSecurityGroupTag),
+					Values: []string{name},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, secGroup := range out.SecurityGroups {
+			_, err := sg.ec2Client.DeleteSecurityGroup(ctx, &ec2.DeleteSecurityGroupInput{
+				GroupId: secGroup.GroupId,
+			})
+			if err != nil {
+				errs = multierr.Append(errs, err)
+				continue
+			}
+		}
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+
+	return errs
+}
+
 type stack struct {
 	cloudFormationClient *cloudformation.Client
 }
@@ -280,6 +358,19 @@ func (s *stack) Cleanup(ctx context.Context, names []string) ([]string, error) {
 		deleted = append(deleted, names[i])
 	}
 	return deleted, errs
+}
+
+func (s *stack) DeleteByClusterName(ctx context.Context, name string) error {
+	_, err := s.cloudFormationClient.DeleteStack(ctx, &cloudformation.DeleteStackInput{
+		StackName: lo.ToPtr("iam-" + name),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.cloudFormationClient.DeleteStack(ctx, &cloudformation.DeleteStackInput{
+		StackName: lo.ToPtr("eksctl-" + name + "-cluster"),
+	})
+	return err
 }
 
 type launchtemplate struct {
@@ -338,6 +429,42 @@ func (lt *launchtemplate) Cleanup(ctx context.Context, names []string) ([]string
 	return deleted, errs
 }
 
+func (lt *launchtemplate) DeleteByClusterName(ctx context.Context, name string) error {
+	var nextToken *string
+	var errs error
+	for {
+		out, err := lt.ec2Client.DescribeLaunchTemplates(ctx, &ec2.DescribeLaunchTemplatesInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr(karpenterLaunchTemplateTag),
+					Values: []string{name},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, launchTemp := range out.LaunchTemplates {
+			_, err := lt.ec2Client.DeleteLaunchTemplate(ctx, &ec2.DeleteLaunchTemplateInput{
+				LaunchTemplateId: launchTemp.LaunchTemplateId,
+			})
+			if err != nil {
+				errs = multierr.Append(errs, err)
+				continue
+			}
+		}
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+
+	return errs
+}
+
 type oidc struct {
 	iamClient *iam.Client
 }
@@ -388,6 +515,10 @@ func (o *oidc) Cleanup(ctx context.Context, arns []string) ([]string, error) {
 		deleted = append(deleted, arns[i])
 	}
 	return deleted, errs
+}
+
+func (o *oidc) DeleteByClusterName(ctx context.Context, name string) error {
+	return nil
 }
 
 type instanceProfile struct {
@@ -443,6 +574,10 @@ func (ip *instanceProfile) Cleanup(ctx context.Context, names []string) ([]strin
 		}
 	}
 	return deleted, errs
+}
+
+func (ip *instanceProfile) DeleteByClusterName(ctx context.Context, name string) error {
+	return nil
 }
 
 type eni struct {
@@ -508,6 +643,42 @@ func (e *eni) Cleanup(ctx context.Context, ids []string) ([]string, error) {
 	}
 
 	return deleted, errs
+}
+
+func (e *eni) DeleteByClusterName(ctx context.Context, name string) error {
+	var nextToken *string
+	var errs error
+	for {
+		out, err := e.ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr(k8sClusterTag),
+					Values: []string{name},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return err
+		}
+
+		for _, ni := range out.NetworkInterfaces {
+			_, err := e.ec2Client.DeleteNetworkInterface(ctx, &ec2.DeleteNetworkInterfaceInput{
+				NetworkInterfaceId: ni.NetworkInterfaceId,
+			})
+			if err != nil {
+				errs = multierr.Append(errs, err)
+				continue
+			}
+		}
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+
+	return errs
 }
 
 type timestream struct {
