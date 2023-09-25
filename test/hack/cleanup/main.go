@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -24,6 +25,7 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
 	timestreamtypes "github.com/aws/aws-sdk-go-v2/service/timestreamwrite/types"
@@ -52,7 +54,7 @@ const (
 
 type CleanableResourceType interface {
 	Type() string
-	Get(context.Context, time.Time) ([]string, error)
+	Get(context.Context, string, time.Time) ([]string, error)
 	Cleanup(context.Context, []string) ([]string, error)
 }
 
@@ -61,6 +63,10 @@ type MetricsClient interface {
 }
 
 func main() {
+	clusterName := ""
+	if len(os.Args) == 2 {
+		clusterName = os.Args[1]
+	}
 	ctx := context.Background()
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
@@ -78,15 +84,16 @@ func main() {
 
 	resources := []CleanableResourceType{
 		&eni{ec2Client: ec2Client},
-		&instance{ec2Client: ec2Client},
 		&securitygroup{ec2Client: ec2Client},
+		&instance{ec2Client: ec2Client},
 		&stack{cloudFormationClient: cloudFormationClient},
 		&launchtemplate{ec2Client: ec2Client},
 		&oidc{iamClient: iamClient},
 		&instanceProfile{iamClient: iamClient},
 	}
+
 	workqueue.ParallelizeUntil(ctx, len(resources), len(resources), func(i int) {
-		ids, err := resources[i].Get(ctx, expirationTime)
+		ids, err := resources[i].Get(ctx, clusterName, expirationTime)
 		if err != nil {
 			logger.With("type", resources[i].Type()).Errorf("%v", err)
 		}
@@ -112,7 +119,7 @@ func (i *instance) Type() string {
 	return "Instances"
 }
 
-func (i *instance) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
+func (i *instance) Get(ctx context.Context, _ string, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
 	for {
 		out, err := i.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
@@ -169,16 +176,29 @@ func (sg *securitygroup) Type() string {
 	return "SecurityGroup"
 }
 
-func (sg *securitygroup) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
+func (sg *securitygroup) Get(ctx context.Context, clusterName string, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("group-name"),
+				Values: []string{"security-group-drift"},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + karpenterSecurityGroupTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := sg.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("group-name"),
-					Values: []string{"security-group-drift"},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -234,8 +254,11 @@ func (s *stack) Type() string {
 	return "CloudformationStacks"
 }
 
-func (s *stack) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
+func (s *stack) Get(ctx context.Context, clusterName string, expirationTime time.Time) (names []string, err error) {
 	var nextToken *string
+	if clusterName != "" {
+		return []string{fmt.Sprintf("iam-%s", clusterName), fmt.Sprintf("eksctl-%s", clusterName)}, nil
+	}
 	for {
 		out, err := s.cloudFormationClient.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{
 			NextToken: nextToken,
@@ -290,16 +313,28 @@ func (lt *launchtemplate) Type() string {
 	return "LaunchTemplates"
 }
 
-func (lt *launchtemplate) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
+func (lt *launchtemplate) Get(ctx context.Context, clusterName string, expirationTime time.Time) (names []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag-key"),
+				Values: []string{karpenterLaunchTemplateTag},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + karpenterLaunchTemplateTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := lt.ec2Client.DescribeLaunchTemplates(ctx, &ec2.DescribeLaunchTemplatesInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("tag-key"),
-					Values: []string{karpenterLaunchTemplateTag},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
@@ -346,7 +381,7 @@ func (o *oidc) Type() string {
 	return "OpenIDConnectProvider"
 }
 
-func (o *oidc) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
+func (o *oidc) Get(ctx context.Context, _ string, expirationTime time.Time) (names []string, err error) {
 	out, err := o.iamClient.ListOpenIDConnectProviders(ctx, &iam.ListOpenIDConnectProvidersInput{})
 	if err != nil {
 		return names, err
@@ -398,7 +433,7 @@ func (ip *instanceProfile) Type() string {
 	return "InstanceProfile"
 }
 
-func (ip *instanceProfile) Get(ctx context.Context, expirationTime time.Time) (names []string, err error) {
+func (ip *instanceProfile) Get(ctx context.Context, _ string, expirationTime time.Time) (names []string, err error) {
 	out, err := ip.iamClient.ListInstanceProfiles(ctx, &iam.ListInstanceProfilesInput{})
 	if err != nil {
 		return names, err
@@ -456,16 +491,28 @@ func (e *eni) Type() string {
 	return "ElasticNetworkInterface"
 }
 
-func (e *eni) Get(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
+func (e *eni) Get(ctx context.Context, clusterName string, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
+	var ec2Filter []ec2types.Filter
+	if clusterName == "" {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag-key"),
+				Values: []string{k8sClusterTag},
+			},
+		}
+	} else {
+		ec2Filter = []ec2types.Filter{
+			{
+				Name:   lo.ToPtr("tag:" + k8sClusterTag),
+				Values: []string{clusterName},
+			},
+		}
+	}
+
 	for {
 		out, err := e.ec2Client.DescribeNetworkInterfaces(ctx, &ec2.DescribeNetworkInterfacesInput{
-			Filters: []ec2types.Filter{
-				{
-					Name:   lo.ToPtr("tag-key"),
-					Values: []string{k8sClusterTag},
-				},
-			},
+			Filters:   ec2Filter,
 			NextToken: nextToken,
 		})
 		if err != nil {
