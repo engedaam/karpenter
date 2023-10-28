@@ -36,13 +36,15 @@ on:
           - "1.27"
           - "1.28"
         default: "1.28"
-      enable_metrics:
-        type: boolean
-        default: false
+      cluster_name:
+        type: string
       cleanup:
         type: boolean
         required: true
         default: true
+      enable_metrics:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       git_ref:
@@ -64,9 +66,14 @@ on:
         required: true
       workflow_trigger:
         type: string
+      cluster_name:
+        type: string
+        description: If cluster_name is empty, a new cluster will be created. Otherwise, tests will run on an existing cluster
     secrets:
       SLACK_WEBHOOK_URL:
-        required: true
+        required: false
+      SLACK_WEBHOOK_SOAK_URL:
+        required: false
 jobs:
   run-suite:
     permissions:
@@ -97,10 +104,18 @@ jobs:
       - id: generate-cluster-name
         name: generate cluster name
         run: |
-          CLUSTER_NAME="$(echo ${{ inputs.suite }}-"$RANDOM$RANDOM" | awk '{print tolower($0)}' | tr / -)"
-          echo Using cluster name "$CLUSTER_NAME"
+          CLUSTER_NAME=''
+          if [[ '${{ inputs.cluster_name }}' == '' ]] && [[ '${{ inputs.workflow_trigger }}' == 'soak' ]]; then 
+            CLUSTER_NAME=$(echo soak-periodic-$RANDOM$RANDOM | awk '{print tolower($0)}' | tr / -)
+          elif  [[ '${{ inputs.cluster_name }}' == '' ]] && [[ '${{ inputs.workflow_trigger }}' != 'soak' ]]; then 
+            CLUSTER_NAME=$(echo ${{ inputs.suite }}-$RANDOM$RANDOM | awk '{print tolower($0)}' | tr / -) 
+          else 
+            CLUSTER_NAME='${{ inputs.cluster_name }}'
+          fi
+          echo "Using cluster name \"$CLUSTER_NAME\""
           echo CLUSTER_NAME="$CLUSTER_NAME" >> "$GITHUB_OUTPUT"
       - name: setup eks cluster '${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}'
+        if: inputs.cluster_name == ''
         uses: ./.github/actions/e2e/setup-cluster
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
@@ -131,7 +146,8 @@ jobs:
         uses: ./.github/actions/e2e/slack/notify
         if: (success() || failure()) && github.event_name != 'workflow_run' && inputs.workflow_trigger != 'versionCompatibility'
         with:
-          url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
+          url: ${{ inputs.workflow_trigger == 'soak' || secrets.SLACK_WEBHOOK_SOAK_URL && secrets.SLACK_WEBHOOK_URL }}
           suite: ${{ inputs.suite }}
           git_ref: ${{ inputs.git_ref }}
       - name: dump logs on failure
