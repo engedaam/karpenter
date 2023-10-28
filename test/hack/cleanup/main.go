@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,6 +27,7 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"k8s.io/client-go/util/workqueue"
 
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
@@ -33,7 +36,6 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"k8s.io/client-go/util/workqueue"
 )
 
 const (
@@ -74,6 +76,17 @@ func main() {
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
 	logger := lo.Must(zap.NewProduction()).Sugar()
+
+	if clusterName != "" {
+		// eksctl delete cluster --name ${{ inputs.cluster_name }} --timeout 60m --wait || true
+		deleteCluster := exec.Command("eksctl", "delete", "cluster", "--name", clusterName, "--timeout", "60m", "--wait")
+		fmt.Println(deleteCluster.String())
+		if out, err := deleteCluster.Output(); err != nil {
+			fmt.Println(string(out))
+			log.Fatalf(err.Error())
+		}
+		logger.Infof("deleted cluster %s", clusterName)
+	}
 
 	expirationTime := time.Now().Add(-expirationTTL)
 
