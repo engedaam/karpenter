@@ -36,13 +36,15 @@ on:
           - "1.27"
           - "1.28"
         default: "1.28"
-      enable_metrics:
-        type: boolean
-        default: false
+      preexisiting_cluster:
+        type: string
       cleanup:
         type: boolean
         required: true
         default: true
+      enable_metrics:
+        type: boolean
+        default: false
   workflow_call:
     inputs:
       git_ref:
@@ -63,6 +65,8 @@ on:
         type: boolean
         required: true
       workflow_trigger:
+        type: string
+      preexisiting_cluster:
         type: string
     secrets:
       SLACK_WEBHOOK_URL:
@@ -91,16 +95,22 @@ jobs:
           aws-region: ${{ inputs.region }}
           role-duration-seconds: 21600
       - name: add jitter on cluster creation
+        if: always() && inputs.preexisiting_cluster == 'createNewCluster'
         run: |
           # Creating jitter so that we can stagger cluster creation to avoid throttling
           sleep $(( RANDOM % 300 + 1 ))
       - id: generate-cluster-name
         name: generate cluster name
         run: |
-          CLUSTER_NAME="$(echo ${{ inputs.suite }}-"$RANDOM$RANDOM" | awk '{print tolower($0)}' | tr / -)"
-          echo Using cluster name "$CLUSTER_NAME"
+          if [[ ${{ inputs.preexisiting_cluster }} == 'createNewCluster' ]]; then 
+            CLUSTER_NAME=$(echo soak-periodic-$RANDOM$RANDOM | awk '{print tolower($0)}' | tr / -)
+          else 
+            CLUSTER_NAME=$(echo ${{ inputs.suite }}-$RANDOM$RANDOM | awk '{print tolower($0)}' | tr / -)
+          fi 
+          echo "Using cluster name \"$CLUSTER_NAME\""
           echo CLUSTER_NAME="$CLUSTER_NAME" >> "$GITHUB_OUTPUT"
       - name: create eks cluster '${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}'
+        if: always() && inputs.preexisiting_cluster == 'createNewCluster'
         uses: ./.github/actions/e2e/create-cluster
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
@@ -124,10 +134,14 @@ jobs:
           if [[ inputs.suite == 'PrivateCluster' ]]; then
             TEST_SUITE="Integration"
           fi
-          aws eks update-kubeconfig --name ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
-          TEST_SUITE="$TEST_SUITE" ENABLE_METRICS=${{ inputs.enable_metrics }} METRICS_REGION=${{ vars.TIMESTREAM_REGION }} GIT_REF="$(git rev-parse HEAD)" \
-            CLUSTER_NAME="${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}" CLUSTER_ENDPOINT="$(aws eks describe-cluster --name ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }} --query "cluster.endpoint" --output text)" \
-            INTERRUPTION_QUEUE="${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}" make e2etests
+          NAME="${{ inputs.preexisiting_cluster }}"
+          if [[ "$NAME" == '' || "$NAME" == 'createNewCluster' ]]; then
+            NAME="${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}"
+          fi
+
+          aws eks update-kubeconfig --name "$NAME"
+          INTERRUPTION_QUEUE="$NAME" CLUSTER_NAME="$NAME" TEST_SUITE="$TEST_SUITE" ENABLE_METRICS=${{ inputs.enable_metrics }} METRICS_REGION=${{ vars.TIMESTREAM_REGION }} GIT_REF="$(git rev-parse HEAD)" \
+            CLUSTER_ENDPOINT="$(aws eks describe-cluster --name "$NAME" --query "cluster.endpoint" --output text)"  make e2etests
       - name: notify slack of success or failure
         uses: ./.github/actions/e2e/slack/notify
         if: (success() || failure()) && github.event_name != 'workflow_run' && inputs.workflow_trigger != 'versionCompatibility'
@@ -143,15 +157,15 @@ jobs:
           account_id: ${{ vars.ACCOUNT_ID }}
           role: ${{ vars.ROLE_NAME }}
           region: ${{ inputs.region }}
-          cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
-      - name: cleanup karpenter and cluster '${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}' resources
+          cluster_name: ${{ inputs.preexisiting_cluster || steps.generate-cluster-name.outputs.CLUSTER_NAME }}
+      - name: cleanup karpenter and cluster '${{ inputs.preexisiting_cluster || steps.generate-cluster-name.outputs.CLUSTER_NAME }}' resources
         uses: ./.github/actions/e2e/cleanup
         if: always() && inputs.cleanup
         with:
           account_id: ${{ vars.ACCOUNT_ID }}
           role: ${{ vars.ROLE_NAME }}
           region: ${{ inputs.region }}
-          cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
+          cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME  || inputs.preexisiting_cluster }}
           git_ref: ${{ inputs.git_ref }}
           eksctl_version: v0.164.0
       - if: always() && github.event_name == 'workflow_run'

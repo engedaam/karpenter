@@ -18,20 +18,26 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/samber/lo"
-	"go.uber.org/zap"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"github.com/aws/aws-sdk-go/aws"
 
 	"github.com/aws/karpenter/test/hack/cleanup/metrics"
 	"github.com/aws/karpenter/test/hack/cleanup/resourcetypes"
+
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
 )
 
 const expirationTTL = time.Hour * 12
+const soakExpirationTTL = time.Hour * 168 // 7 Days
 
 func main() {
 	var clusterName string
@@ -44,12 +50,18 @@ func main() {
 	logger := lo.Must(zap.NewProduction()).Sugar()
 
 	expirationTime := time.Now().Add(-expirationTTL)
+	soakExpirationTime := time.Now().Add(-soakExpirationTTL)
 
 	logger.With("expiration-time", expirationTime.String()).Infof("resolved expiration time for all resourceTypes")
 
 	ec2Client := ec2.NewFromConfig(cfg)
 	cloudFormationClient := cloudformation.NewFromConfig(cfg)
 	iamClient := iam.NewFromConfig(cfg)
+	eksClient := eks.NewFromConfig(cfg)
+
+	if clusterName != "" {
+		cleanUpCluster(ctx, clusterName, eksClient, logger, soakExpirationTime)
+	}
 
 	metricsClient := metrics.Client(metrics.NewTimeStream(cfg))
 
@@ -90,6 +102,29 @@ func main() {
 				resourceLogger.Errorf("%v", err)
 			}
 			resourceLogger.With("ids", cleaned, "count", len(cleaned)).Infof("deleted resourceTypes")
+		}
+	}
+}
+
+func cleanUpCluster(ctx context.Context, name string, client *eks.Client, log *zap.SugaredLogger, expirationTime time.Time) {
+	if name != "" {
+		if strings.HasPrefix(name, "soak-periodic-") {
+			cluster, err := client.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: aws.String(name)})
+			if err != nil {
+				log.Errorf("%v", err)
+			}
+
+			if !lo.FromPtr(cluster.Cluster.CreatedAt).Before(expirationTime) {
+				log.Infof("soak testing cluster (%s) does not need to be cleaned up until %s", name, expirationTime)
+				os.Exit(0)
+			}
+		}
+
+		deleteCluster := exec.Command("eksctl", "delete", "cluster", "--name", name, "--timeout", "60m", "--wait")
+		fmt.Println(deleteCluster.String())
+		if out, err := deleteCluster.Output(); err != nil {
+			fmt.Println(string(out))
+			log.Errorf("%v", err)
 		}
 	}
 }
