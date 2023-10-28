@@ -16,34 +16,36 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/samber/lo"
-	"go.uber.org/zap"
-
 	"github.com/aws/karpenter/test/hack/resource/pkg/metrics"
 	"github.com/aws/karpenter/test/hack/resource/pkg/resourcetypes"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
 )
 
-const expirationTTL = time.Hour * 12
 const sweeperCleanedResourcesTableName = "sweeperCleanedResources"
 
 func main() {
-	var clusterName string
-	if len(os.Args) == 2 {
-		clusterName = os.Args[1]
-	}
+	expiration := flag.String("expiration", "12h", "define the expirationTTL of the resources")
+	clusterName := flag.String("clusterName", "", "define cluster name to cleanup")
+	flag.Parse()
+
 	ctx := context.Background()
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
 	logger := lo.Must(zap.NewProduction()).Sugar()
 
+	expirationTTL, err := time.ParseDuration(lo.FromPtr(expiration))
+	if err != nil {
+		logger.Fatalln("need a valid expiration duration", err)
+	}
 	expirationTime := time.Now().Add(-expirationTTL)
 
 	logger.With("expiration-time", expirationTime.String()).Infof("resolved expiration time for all resourceTypes")
@@ -73,10 +75,10 @@ func main() {
 		resourceLogger := logger.With("type", resourceTypes[i].String())
 		var ids []string
 		var err error
-		if clusterName == "" {
+		if lo.FromPtr(clusterName) == "" {
 			ids, err = resourceTypes[i].GetExpired(ctx, expirationTime)
 		} else {
-			ids, err = resourceTypes[i].Get(ctx, clusterName)
+			ids, err = resourceTypes[i].Get(ctx, lo.FromPtr(clusterName))
 		}
 		if err != nil {
 			resourceLogger.Errorf("%v", err)
