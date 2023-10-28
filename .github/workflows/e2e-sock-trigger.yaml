@@ -1,0 +1,68 @@
+name: E2ESoakTrigger
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_run:
+    workflows: [ApprovalComment]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        type: string
+      region:
+        required: true
+        default: 'us-east-1'
+        type: choice
+        options:
+          - "us-east-1"
+          - "us-west-2"
+permissions:
+    id-token: write # aws-actions/configure-aws-credentials@v4.0.1
+    statuses: write # ./.github/actions/commit-status/start
+jobs:
+  resolve_cluster:
+    runs-on: ubuntu-latest
+    outputs:
+      PREEXISTING: ${{ steps.create_cluster.outputs.PREEXISTING_CLUSTERS }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref }}
+    - name: configure aws credentials
+      uses: aws-actions/configure-aws-credentials@v4.0.1
+      with:
+       role-to-assume: arn:aws:iam::${{ vars.ACCOUNT_ID }}:role/${{ vars.ROLE_NAME }}
+       aws-region: ${{ inputs.region || 'us-east-1' }}
+       role-duration-seconds: 21600
+    - uses: actions/setup-go@v4
+      with:
+        go-version-file: test/hack/soak/go.mod
+        cache-dependency-path: test/hack/soak/go.sum
+        check-latest: true
+        cache: false
+    - name: "Run cleanup script"
+      run: |
+        PREEXISTING_CLUSTERS="$(go run main.go)" 
+        echo PREEXISTING_CLUSTERS
+        echo PREEXISTING_CLUSTERS="PREEXISTING_CLUSTERS" >> "$GITHUB_OUTPUT"
+      working-directory: ./test/hack/soak
+      shell: bash
+  soak:
+    runs-on: ubuntu-latest
+    needs: [resolve_cluster]
+    strategy:
+      fail-fast: false
+      matrix:
+        clusters: ${{ fromJson(needs.resolve_cluster.outputs.PREEXISTING_CLUSTERS) }}
+    steps:
+        - run: |
+            echo ${{ matrix.clusters }}
+    # uses: ./.github/workflows/e2e.yaml
+    # with:
+    #   suite: Integration
+    #   region: ${{ inputs.region || 'us-east-1' }}
+    #   workflow_trigger: "soak"
+    #   preexisiting_cluster: ${{ matrix.clusters }}
+    #   cleanup: true
+    # secrets:
+    #   SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
