@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,6 +27,8 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"k8s.io/client-go/util/workqueue"
 
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
@@ -33,11 +37,11 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"k8s.io/client-go/util/workqueue"
 )
 
 const (
 	expirationTTL            = time.Hour * 12
+	sockExpirationTTL        = time.Hour * 24
 	karpenterMetricRegion    = "us-east-2"
 	karpenterMetricDatabase  = "karpenterTesting"
 	karpenterMetricTableName = "sweeperCleanedResources"
@@ -82,6 +86,29 @@ func main() {
 	ec2Client := ec2.NewFromConfig(cfg)
 	cloudFormationClient := cloudformation.NewFromConfig(cfg)
 	iamClient := iam.NewFromConfig(cfg)
+	eksClient := eks.NewFromConfig(cfg)
+
+	if clusterName != "" {
+		if strings.HasPrefix(clusterName, "soak-") {
+			cluster, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: aws.String(clusterName)})
+			if err != nil {
+				logger.Fatalf(err.Error())
+			}
+
+			if !cluster.Cluster.CreatedAt.Before(expirationTime) {
+				logger.Infof("sock testing cluster (%s) will not need to be cleanup", clusterName)
+				return
+			}
+		}
+
+		deleteCluster := exec.Command("eksctl", "delete", "cluster", "--name", clusterName, "--timeout", "60m", "--wait")
+		fmt.Println(deleteCluster.String())
+		if out, err := deleteCluster.Output(); err != nil {
+			fmt.Println(string(out))
+			logger.Fatalf(err.Error())
+		}
+		logger.Infof("deleted cluster %s", clusterName)
+	}
 
 	metricsClient := MetricsClient(&timestream{timestreamClient: timestreamwrite.NewFromConfig(cfg, WithRegion(karpenterMetricRegion))})
 
