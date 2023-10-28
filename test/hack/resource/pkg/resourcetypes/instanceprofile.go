@@ -16,8 +16,10 @@ package resourcetypes
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/samber/lo"
 	"go.uber.org/multierr"
@@ -47,6 +49,9 @@ func (ip *InstanceProfile) GetExpired(ctx context.Context, expirationTime time.T
 
 	errs := make([]error, len(out.InstanceProfiles))
 	for i := range out.InstanceProfiles {
+		if ip.Global() && !strings.Contains(lo.FromPtr(out.InstanceProfiles[i].Arn), lo.Must(config.LoadDefaultConfig(ctx)).Region) {
+			continue
+		}
 		profiles, err := ip.iamClient.ListInstanceProfileTags(ctx, &iam.ListInstanceProfileTagsInput{
 			InstanceProfileName: out.InstanceProfiles[i].InstanceProfileName,
 		})
