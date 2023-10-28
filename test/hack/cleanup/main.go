@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -25,6 +27,8 @@ import (
 	cloudformationtypes "github.com/aws/aws-sdk-go-v2/service/cloudformation/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	"k8s.io/client-go/util/workqueue"
 
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/timestreamwrite"
@@ -33,11 +37,11 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"k8s.io/client-go/util/workqueue"
 )
 
 const (
 	expirationTTL            = time.Hour * 12
+	soakExpirationTTL        = time.Hour * 24
 	karpenterMetricRegion    = "us-east-2"
 	karpenterMetricDatabase  = "karpenterTesting"
 	karpenterMetricTableName = "sweeperCleanedResources"
@@ -76,12 +80,26 @@ func main() {
 	logger := lo.Must(zap.NewProduction()).Sugar()
 
 	expirationTime := time.Now().Add(-expirationTTL)
+	soakExpirationTime := time.Now().Add(-soakExpirationTTL)
 
 	logger.With("expiration-time", expirationTime.String()).Infof("resolved expiration time for all resources")
 
 	ec2Client := ec2.NewFromConfig(cfg)
 	cloudFormationClient := cloudformation.NewFromConfig(cfg)
 	iamClient := iam.NewFromConfig(cfg)
+	eksClient := eks.NewFromConfig(cfg)
+
+	if clusterName != "" {
+		continueWithCleanup, err := cleanUpCluster(ctx, clusterName, eksClient, soakExpirationTime)
+		if err == nil && continueWithCleanup {
+			logger.Infof("soak testing cluster (%s) will not need to be cleanup", clusterName)
+			os.Exit(0)
+		} else if err != nil {
+			logger.Errorf("%v", err)
+		} else {
+			logger.Infof("deleted cluster %s", clusterName)
+		}
+	}
 
 	metricsClient := MetricsClient(&timestream{timestreamClient: timestreamwrite.NewFromConfig(cfg, WithRegion(karpenterMetricRegion))})
 
@@ -118,6 +136,29 @@ func main() {
 			logger.With("type", resources[i].Type(), "ids", cleaned, "count", len(cleaned)).Infof("deleted resources")
 		}
 	})
+}
+
+func cleanUpCluster(ctx context.Context, name string, client *eks.Client, expirationTime time.Time) (bool, error) {
+	if name != "" {
+		if strings.HasPrefix(name, "soak-") {
+			cluster, err := client.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: aws.String(name)})
+			if err != nil {
+				return true, err
+			}
+
+			if !lo.FromPtr(cluster.Cluster.CreatedAt).Before(expirationTime) {
+				return false, nil
+			}
+		}
+
+		deleteCluster := exec.Command("eksctl", "delete", "cluster", "--name", name, "--timeout", "60m", "--wait")
+		fmt.Println(deleteCluster.String())
+		if out, err := deleteCluster.Output(); err != nil {
+			fmt.Println(string(out))
+			return true, err
+		}
+	}
+	return true, nil
 }
 
 type instance struct {
