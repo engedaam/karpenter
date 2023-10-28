@@ -405,7 +405,8 @@ var _ = Describe("Scheduling", Ordered, ContinueOnFailure, func() {
 							{
 								Key:      v1.LabelInstanceTypeStable,
 								Operator: v1.NodeSelectorOpIn,
-								Values:   []string{"c4.large"},
+								// c4 family is not available in eu-north-1
+								Values:   []string{"c5.large"},
 							},
 						},
 					},
