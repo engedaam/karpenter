@@ -383,7 +383,7 @@ Resources:
         - !Ref GithubActionsPolicy
         - !Ref GithubActionsEKSPolicy
         - !Ref GithubActionsIAMPolicy
-        - !Ref GithubActionsPermissionsBoundary
+      PermissionsBoundary: !Ref GithubActionsPermissionsBoundary
       MaxSessionDuration: 21600 # 6 hours is the max session for GHA
       AssumeRolePolicyDocument:
         Version: "2012-10-17"

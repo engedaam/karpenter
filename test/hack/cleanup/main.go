@@ -18,20 +18,26 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/samber/lo"
-	"go.uber.org/zap"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
 
 	"github.com/aws/karpenter/test/hack/cleanup/metrics"
 	"github.com/aws/karpenter/test/hack/cleanup/resourcetypes"
+
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	"github.com/samber/lo"
+	"go.uber.org/zap"
 )
 
 const expirationTTL = time.Hour * 12
+const soakExpirationTTL = time.Hour * 168 // 7 Days
 
 func main() {
 	var clusterName string
@@ -41,18 +47,26 @@ func main() {
 	ctx := context.Background()
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
-	logger := lo.Must(zap.NewProduction()).Sugar()
+	log := lo.Must(zap.NewProduction()).Sugar()
 
+	if clusterName != "" {
+		sweepedResources := cleanUpCluster(ctx, clusterName, cfg, log)
+		if sweepedResources {
+			os.Exit(0)
+		}
+	}
+	sweepResources(ctx, clusterName, cfg, log)
+}
+
+func sweepResources(ctx context.Context, name string, cfg aws.Config, logger *zap.SugaredLogger) {
 	expirationTime := time.Now().Add(-expirationTTL)
-
-	logger.With("expiration-time", expirationTime.String()).Infof("resolved expiration time for all resourceTypes")
 
 	ec2Client := ec2.NewFromConfig(cfg)
 	cloudFormationClient := cloudformation.NewFromConfig(cfg)
 	iamClient := iam.NewFromConfig(cfg)
-
 	metricsClient := metrics.Client(metrics.NewTimeStream(cfg))
 
+	logger.With("expiration-time", expirationTime.String()).Infof("resolved expiration time for all resourceTypes")
 	// These resources are intentionally ordered so that instances that are using ENIs
 	// will be cleaned before ENIs are attempted to be cleaned up. Likewise, instances and ENIs
 	// are cleaned up before security groups are cleaned up to ensure that everything is detached and doesn't
@@ -72,10 +86,10 @@ func main() {
 		resourceLogger := logger.With("type", resourceTypes[i].String())
 		var ids []string
 		var err error
-		if clusterName == "" {
+		if name == "" {
 			ids, err = resourceTypes[i].GetExpired(ctx, expirationTime)
 		} else {
-			ids, err = resourceTypes[i].Get(ctx, clusterName)
+			ids, err = resourceTypes[i].Get(ctx, name)
 		}
 		if err != nil {
 			resourceLogger.Errorf("%v", err)
@@ -92,4 +106,31 @@ func main() {
 			resourceLogger.With("ids", cleaned, "count", len(cleaned)).Infof("deleted resourceTypes")
 		}
 	}
+}
+
+func cleanUpCluster(ctx context.Context, name string, cfg aws.Config, logger *zap.SugaredLogger) bool {
+	soakExpirationTime := time.Now().Add(-soakExpirationTTL)
+	eksClient := eks.NewFromConfig(cfg)
+
+	if strings.HasPrefix(name, "soak-periodic-") {
+		cluster, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: aws.String(name)})
+		if err != nil {
+			logger.Errorf("%v", err)
+			return false
+		}
+
+		if !lo.FromPtr(cluster.Cluster.CreatedAt).Before(soakExpirationTime) {
+			logger.Infof("soak testing cluster (%s) does not need to be cleaned up until %s", name, soakExpirationTime)
+			return true
+		}
+	}
+
+	deleteCluster := exec.Command("eksctl", "delete", "cluster", "--name", name, "--timeout", "60m", "--wait")
+	if out, err := deleteCluster.Output(); err != nil {
+		logger.Errorf("%v", err)
+	} else {
+		fmt.Println(string(out))
+	}
+
+	return false
 }
