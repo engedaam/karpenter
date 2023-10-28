@@ -1,0 +1,67 @@
+name: E2ESoakTrigger
+on:
+  schedule:
+    - cron: '0 */3 * * *'
+  workflow_run:
+    workflows: [ApprovalComment]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      region:
+        required: true
+        default: 'us-east-1'
+        type: choice
+        options:
+          - "us-east-1"
+          - "us-west-2"
+      cleanup:
+        required: true
+        default: true
+        type: boolean
+permissions:
+    id-token: write # aws-actions/configure-aws-credentials@v4.0.1
+    statuses: write # ./.github/actions/commit-status/start
+jobs:
+  reslove_cluster:
+    runs-on: ubuntu-latest
+    outputs:
+      CREATE_CLUSTER: ${{ steps.create_cluster.outputs.CREATE_CLUSTER }}
+      PREEXISTING: ${{ steps.create_cluster.outputs.PREEXISTING }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.git_ref }}
+    - name: configure aws credentials
+      uses: aws-actions/configure-aws-credentials@v4.0.1
+      with:
+       role-to-assume: arn:aws:iam::${{ vars.ACCOUNT_ID }}:role/${{ vars.ROLE_NAME }}
+       aws-region: ${{ inputs.region || 'us-east-1' }}
+       role-duration-seconds: 21600
+    - uses: ./.github/actions/e2e/install-eksctl
+      with:
+        version: v0.163.0
+    - id: create_cluster
+      run: |
+       export PREEXISTING=$(eksctl get cluster -o json | jq '.[].Name' | grep soak)
+       echo "Found existing cluster name \"$PREEXISTING\""
+       if [[ $PREEXISTING != '' ]]; then 
+           echo Here1
+           echo PREEXISTING=$PREEXISTING >> $GITHUB_OUTPUT
+           echo CREATE_CLUSTER=false >> $GITHUB_OUTPUT
+       else
+           echo Here2
+           echo CREATE_CLUSTER=true >> $GITHUB_OUTPUT
+       fi
+  sock:
+    needs: [reslove_cluster]
+    uses: ./.github/workflows/e2e.yaml
+    with:
+      suite: Integration
+      region: ${{ inputs.region || 'us-east-1' }}
+      workflow_trigger: "soak"
+      create_cluster: ${{ needs.reslove_cluster.outputs.CREATE_CLUSTER }}
+      preexisiting_cluster: ${{needs.reslove_cluster.outputs.PREEXISTING || '' }}
+      # Default to true unless using a workflow_dispatch
+      cleanup: false
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
