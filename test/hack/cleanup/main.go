@@ -17,7 +17,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
+	"os/exec"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -74,6 +76,15 @@ func main() {
 	cfg := lo.Must(config.LoadDefaultConfig(ctx))
 
 	logger := lo.Must(zap.NewProduction()).Sugar()
+
+	if clusterName != "" {
+		// eksctl delete cluster --name ${{ inputs.cluster_name }} --timeout 60m --wait || true
+		arg := fmt.Sprintf("delete cluster --name %s --timeout 60m --wait || true", clusterName)
+		if err := exec.Command("eksctl", arg).Run(); err != nil {
+			log.Fatalf(err.Error())
+		}
+		logger.Infof("deleted cluster %s", clusterName)
+	}
 
 	expirationTime := time.Now().Add(-expirationTTL)
 
