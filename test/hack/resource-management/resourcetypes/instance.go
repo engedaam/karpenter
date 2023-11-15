@@ -71,6 +71,39 @@ func (i *Instance) GetExpired(ctx context.Context, expirationTime time.Time) (id
 	return ids, err
 }
 
+func (i *Instance) GetCount(ctx context.Context) (count int, err error) {
+	var nextToken *string
+
+	for {
+		out, err := i.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr("instance-state-name"),
+					Values: []string{string(ec2types.InstanceStateNameRunning)},
+				},
+				{
+					Name:   lo.ToPtr("tag-key"),
+					Values: []string{karpenterNodePoolTag},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return count, err
+		}
+
+		for _, res := range out.Reservations {
+			count += len(res.Instances)
+		}
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+	return count, err
+}
+
 func (i *Instance) Get(ctx context.Context, clusterName string) (ids []string, err error) {
 	var nextToken *string
 

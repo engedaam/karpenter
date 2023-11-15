@@ -1,7 +1,7 @@
-name: Sweeper
+name: ResourceCountGenerator
 on:
   schedule:
-    - cron: '0 */12 * * *'
+    - cron: '*/30 * * * *' # every 30 minute 
   workflow_dispatch:
 permissions:
   id-token: write # aws-actions/configure-aws-credentials@v4.0.1
@@ -26,5 +26,5 @@ jobs:
           check-latest: true
           cache-dependency-path: "test/hack/resource-management/go.sum"
       - run: go run main.go
-        working-directory: ./test/hack/resource-management/clean-resources
+        working-directory: ./test/hack/resource-management/count-resources
         name: "Run cleanup script"

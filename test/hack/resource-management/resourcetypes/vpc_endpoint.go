@@ -61,6 +61,32 @@ func (v *VPCEndpoint) Get(ctx context.Context, clusterName string) (ids []string
 	return ids, err
 }
 
+func (v *VPCEndpoint) GetCount(ctx context.Context) (count int, err error) {
+	var nextToken *string
+	for {
+		out, err := v.ec2Client.DescribeVpcEndpoints(ctx, &ec2.DescribeVpcEndpointsInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr("tag-key"),
+					Values: []string{karpenterTestingTag},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return count, err
+		}
+
+		count += len(out.VpcEndpoints)
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+	return count, err
+}
+
 func (v *VPCEndpoint) GetExpired(ctx context.Context, expirationTime time.Time) (ids []string, err error) {
 	var nextToken *string
 	for {
