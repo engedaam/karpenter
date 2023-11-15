@@ -77,6 +77,32 @@ func (sg *SecurityGroup) GetExpired(ctx context.Context, expirationTime time.Tim
 	return ids, err
 }
 
+func (sg *SecurityGroup) GetCount(ctx context.Context) (count int, err error) {
+	var nextToken *string
+	for {
+		out, err := sg.ec2Client.DescribeSecurityGroups(ctx, &ec2.DescribeSecurityGroupsInput{
+			Filters: []ec2types.Filter{
+				{
+					Name:   lo.ToPtr("tag-key"),
+					Values: []string{karpenterSecurityGroupTag},
+				},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return count, err
+		}
+
+		count += len(out.SecurityGroups)
+
+		nextToken = out.NextToken
+		if nextToken == nil {
+			break
+		}
+	}
+	return count, err
+}
+
 func (sg *SecurityGroup) Get(ctx context.Context, clusterName string) (ids []string, err error) {
 	var nextToken *string
 	for {

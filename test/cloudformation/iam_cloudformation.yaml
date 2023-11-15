@@ -22,6 +22,9 @@ Parameters:
   SweeperTableName:
     Type: String
     Description: "Timestream table to forward leaked resources to"
+  ResourceCountTableName:
+    Type: String
+    Description: "Timestream table to count number of resources to"
 Resources:
   GithubOIDCProvider:
     Type: AWS::IAM::OIDCProvider
