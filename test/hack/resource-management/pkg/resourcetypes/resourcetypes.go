@@ -42,4 +42,6 @@ type Type interface {
 	// In general, if all resources can't be deleted by id with a single API call (like with DeleteInstances)
 	// you should call the requests synchronously to avoid rate limiting against the number of requests made
 	Cleanup(ctx context.Context, ids []string) (cleaned []string, err error)
+	// GetCount returns the number of resource of the type in the account
+	GetCount(ctx context.Context) (count int, err error)
 }
