@@ -3,12 +3,12 @@ set -euo pipefail
 
 config(){
   GITHUB_ACCOUNT="aws"
-  AWS_ACCOUNT_ID="071440425669"
+  AWS_ACCOUNT_ID="605559265918"
   ECR_GALLERY_NAME="karpenter"
   RELEASE_REPO_ECR=${RELEASE_REPO_ECR:-public.ecr.aws/${ECR_GALLERY_NAME}/}
   RELEASE_REPO_GH=${RELEASE_REPO_GH:-ghcr.io/${GITHUB_ACCOUNT}/karpenter}
 
-  PRIVATE_HOST="${AWS_ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com"
+  PRIVATE_HOST="${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com"
   SNAPSHOT_REPO_ECR=${SNAPSHOT_REPO_ECR:-${PRIVATE_HOST}/karpenter/snapshot/}
 
   CURRENT_MAJOR_VERSION="0"
