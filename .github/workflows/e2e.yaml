@@ -67,11 +67,11 @@ on:
     secrets:
       SLACK_WEBHOOK_URL:
         required: true
-permissions:
-  id-token: write # aws-actions/configure-aws-credentials@v4.0.1
-  statuses: write # ./.github/actions/commit-status/start
 jobs:
   run-suite:
+    permissions:
+      id-token: write # aws-actions/configure-aws-credentials@v4.0.1
+      statuses: write # ./.github/actions/commit-status/start
     name: suite-${{ inputs.suite }}
     runs-on: ubuntu-latest
     steps:
@@ -108,7 +108,7 @@ jobs:
           region: ${{ inputs.region }}
           cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
           k8s_version: ${{ inputs.k8s_version }}
-          eksctl_version: v0.164.0
+          eksctl_version: v0.165.0
           ip_family: ${{ contains(inputs.suite, 'IPv6') && 'IPv6' || 'IPv4' }} # Set the value to IPv6 if IPv6 suite, else IPv4
           private_cluster: ${{ inputs.suite == 'PrivateCluster' }}
           git_ref: ${{ inputs.git_ref }}
@@ -152,7 +152,7 @@ jobs:
           region: ${{ inputs.region }}
           cluster_name: ${{ steps.generate-cluster-name.outputs.CLUSTER_NAME }}
           git_ref: ${{ inputs.git_ref }}
-          eksctl_version: v0.164.0
+          eksctl_version: v0.165.0
       - if: always() && github.event_name == 'workflow_run'
         uses: ./.github/actions/commit-status/end
         with:

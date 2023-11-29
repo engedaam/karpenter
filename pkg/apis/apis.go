@@ -26,16 +26,14 @@ import (
 
 	"github.com/samber/lo"
 
-	"github.com/aws/karpenter-core/pkg/apis"
-	coresettings "github.com/aws/karpenter-core/pkg/apis/settings"
-	"github.com/aws/karpenter-core/pkg/utils/functional"
-	"github.com/aws/karpenter/pkg/apis/v1alpha1"
+	"sigs.k8s.io/karpenter/pkg/apis"
+	coresettings "sigs.k8s.io/karpenter/pkg/apis/settings"
+	"sigs.k8s.io/karpenter/pkg/utils/functional"
 )
 
 var (
 	// Builder includes all types within the apis package
 	Builder = runtime.NewSchemeBuilder(
-		v1alpha1.SchemeBuilder.AddToScheme,
 		v1beta1.SchemeBuilder.AddToScheme,
 	)
 	// AddToScheme may be used to add all resources defined in the project to a Scheme
@@ -45,12 +43,9 @@ var (
 
 //go:generate controller-gen crd object:headerFile="../../hack/boilerplate.go.txt" paths="./..." output:crd:artifacts:config=crds
 var (
-	//go:embed crds/karpenter.k8s.aws_awsnodetemplates.yaml
-	AWSNodeTemplateCRD []byte
 	//go:embed crds/karpenter.k8s.aws_ec2nodeclasses.yaml
 	EC2NodeClassCRD []byte
 	CRDs            = append(apis.CRDs,
-		lo.Must(functional.Unmarshal[v1.CustomResourceDefinition](AWSNodeTemplateCRD)),
 		lo.Must(functional.Unmarshal[v1.CustomResourceDefinition](EC2NodeClassCRD)),
 	)
 )

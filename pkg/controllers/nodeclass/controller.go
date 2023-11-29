@@ -38,9 +38,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	corev1beta1 "github.com/aws/karpenter-core/pkg/apis/v1beta1"
-	"github.com/aws/karpenter-core/pkg/events"
-	corecontroller "github.com/aws/karpenter-core/pkg/operator/controller"
+	corev1beta1 "sigs.k8s.io/karpenter/pkg/apis/v1beta1"
+	"sigs.k8s.io/karpenter/pkg/events"
+	corecontroller "sigs.k8s.io/karpenter/pkg/operator/controller"
+
 	"github.com/aws/karpenter/pkg/apis/v1beta1"
 	"github.com/aws/karpenter/pkg/providers/amifamily"
 	"github.com/aws/karpenter/pkg/providers/instanceprofile"
@@ -72,9 +73,7 @@ func NewController(kubeClient client.Client, recorder events.Recorder, subnetPro
 
 func (c *Controller) Reconcile(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) (reconcile.Result, error) {
 	stored := nodeClass.DeepCopy()
-	if !nodeClass.IsNodeTemplate {
-		controllerutil.AddFinalizer(nodeClass, v1beta1.TerminationFinalizer)
-	}
+	controllerutil.AddFinalizer(nodeClass, v1beta1.TerminationFinalizer)
 	nodeClass.Annotations = lo.Assign(nodeClass.Annotations, nodeclassutil.HashAnnotation(nodeClass))
 	err := multierr.Combine(
 		c.resolveSubnets(ctx, nodeClass),
@@ -99,9 +98,6 @@ func (c *Controller) Reconcile(ctx context.Context, nodeClass *v1beta1.EC2NodeCl
 
 func (c *Controller) Finalize(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) (reconcile.Result, error) {
 	stored := nodeClass.DeepCopy()
-	if nodeClass.IsNodeTemplate {
-		return reconcile.Result{}, nil
-	}
 	if !controllerutil.ContainsFinalizer(nodeClass, v1beta1.TerminationFinalizer) {
 		return reconcile.Result{}, nil
 	}
@@ -200,9 +196,6 @@ func (c *Controller) resolveAMIs(ctx context.Context, nodeClass *v1beta1.EC2Node
 }
 
 func (c *Controller) resolveInstanceProfile(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) error {
-	if nodeClass.IsNodeTemplate {
-		return nil
-	}
 	if nodeClass.Spec.Role != "" {
 		name, err := c.instanceProfileProvider.Create(ctx, nodeClass)
 		if err != nil {

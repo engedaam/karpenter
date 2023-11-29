@@ -38,10 +38,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/utils/env"
 
-	coreapis "github.com/aws/karpenter-core/pkg/apis"
-	"github.com/aws/karpenter-core/pkg/apis/v1alpha5"
-	corev1beta1 "github.com/aws/karpenter-core/pkg/apis/v1beta1"
-	"github.com/aws/karpenter-core/pkg/operator/scheme"
+	coreapis "sigs.k8s.io/karpenter/pkg/apis"
+	corev1beta1 "sigs.k8s.io/karpenter/pkg/apis/v1beta1"
+	"sigs.k8s.io/karpenter/pkg/operator/scheme"
+
 	"github.com/aws/karpenter/pkg/apis"
 	"github.com/aws/karpenter/pkg/apis/v1beta1"
 	"github.com/aws/karpenter/pkg/providers/sqs"
@@ -51,7 +51,6 @@ import (
 
 func init() {
 	lo.Must0(apis.AddToScheme(scheme.Scheme))
-	v1alpha5.NormalizedLabels = lo.Assign(v1alpha5.NormalizedLabels, map[string]string{"topology.ebs.csi.aws.com/zone": corev1.LabelTopologyZone})
 	corev1beta1.NormalizedLabels = lo.Assign(corev1beta1.NormalizedLabels, map[string]string{"topology.ebs.csi.aws.com/zone": corev1.LabelTopologyZone})
 	coreapis.Settings = append(coreapis.Settings, apis.Settings...)
 }

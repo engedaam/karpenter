@@ -14,10 +14,10 @@ on:
           - "us-east-2"
           - "us-west-2"
           - "eu-west-1"
-permissions:
-  id-token: write # aws-actions/configure-aws-credentials@v4.0.1
 jobs:
   cleanup:
+    permissions:
+      id-token: write # aws-actions/configure-aws-credentials@v4.0.1
     name: cleanup-${{ inputs.cluster_name }}
     runs-on: ubuntu-latest
     steps:
@@ -38,4 +38,4 @@ jobs:
           region: ${{ inputs.region }}
           cluster_name: ${{ inputs.cluster_name }}
           git_ref: ${{ inputs.git_ref }}
-          eksctl_version: v0.164.0
+          eksctl_version: v0.165.0

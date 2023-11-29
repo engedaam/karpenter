@@ -25,16 +25,17 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	corev1beta1 "github.com/aws/karpenter-core/pkg/apis/v1beta1"
-	"github.com/aws/karpenter-core/pkg/events"
-	"github.com/aws/karpenter-core/pkg/utils/functional"
-	nodepoolutil "github.com/aws/karpenter-core/pkg/utils/nodepool"
+	corev1beta1 "sigs.k8s.io/karpenter/pkg/apis/v1beta1"
+	"sigs.k8s.io/karpenter/pkg/events"
+	"sigs.k8s.io/karpenter/pkg/utils/functional"
+	nodepoolutil "sigs.k8s.io/karpenter/pkg/utils/nodepool"
+
 	"github.com/aws/karpenter/pkg/apis/v1beta1"
 	"github.com/aws/karpenter/pkg/utils"
 	nodeclassutil "github.com/aws/karpenter/pkg/utils/nodeclass"
 
-	"github.com/aws/karpenter-core/pkg/scheduling"
-	"github.com/aws/karpenter-core/pkg/utils/resources"
+	"sigs.k8s.io/karpenter/pkg/scheduling"
+	"sigs.k8s.io/karpenter/pkg/utils/resources"
 
 	"github.com/samber/lo"
 	v1 "k8s.io/api/core/v1"
@@ -50,8 +51,8 @@ import (
 	"github.com/aws/karpenter/pkg/providers/securitygroup"
 	"github.com/aws/karpenter/pkg/providers/subnet"
 
-	"github.com/aws/karpenter-core/pkg/apis/v1alpha5"
-	"github.com/aws/karpenter-core/pkg/cloudprovider"
+	"sigs.k8s.io/karpenter/pkg/apis/v1alpha5"
+	"sigs.k8s.io/karpenter/pkg/cloudprovider"
 )
 
 var _ cloudprovider.CloudProvider = (*CloudProvider)(nil)
@@ -110,7 +111,7 @@ func (c *CloudProvider) Create(ctx context.Context, nodeClaim *corev1beta1.NodeC
 
 // Link adds a tag to the cloudprovider NodeClaim to tell the cloudprovider that it's now owned by a NodeClaim
 func (c *CloudProvider) Link(ctx context.Context, nodeClaim *corev1beta1.NodeClaim) error {
-	ctx = logging.WithLogger(ctx, logging.FromContext(ctx).With(lo.Ternary(nodeClaim.IsMachine, "machine", "nodeclaim"), nodeClaim.Name))
+	ctx = logging.WithLogger(ctx, logging.FromContext(ctx).With("nodeclaim", nodeClaim.Name))
 	id, err := utils.ParseInstanceID(nodeClaim.Status.ProviderID)
 	if err != nil {
 		return fmt.Errorf("getting instance ID, %w", err)
@@ -180,7 +181,7 @@ func (c *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *corev1be
 }
 
 func (c *CloudProvider) Delete(ctx context.Context, nodeClaim *corev1beta1.NodeClaim) error {
-	ctx = logging.WithLogger(ctx, logging.FromContext(ctx).With(lo.Ternary(nodeClaim.IsMachine, "machine", "nodeclaim"), nodeClaim.Name))
+	ctx = logging.WithLogger(ctx, logging.FromContext(ctx).With("nodeclaim", nodeClaim.Name))
 
 	providerID := lo.Ternary(nodeClaim.Status.ProviderID != "", nodeClaim.Status.ProviderID, nodeClaim.Annotations[v1alpha5.MachineLinkedAnnotationKey])
 	id, err := utils.ParseInstanceID(providerID)
