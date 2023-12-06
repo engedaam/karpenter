@@ -18,14 +18,13 @@ metadata:
 
 iam:
   withOIDC: true
-  serviceAccounts:
+  podIdentityAssociations:
   - metadata:
       name: karpenter
       namespace: "${KARPENTER_NAMESPACE}"
     roleName: ${CLUSTER_NAME}-karpenter
-    attachPolicyARNs:
+    permissionPolicyARNs:
     - arn:${AWS_PARTITION}:iam::${AWS_ACCOUNT_ID}:policy/KarpenterControllerPolicy-${CLUSTER_NAME}
-    roleOnly: true
 
 iamIdentityMappings:
 - arn: "arn:${AWS_PARTITION}:iam::${AWS_ACCOUNT_ID}:role/KarpenterNodeRole-${CLUSTER_NAME}"
@@ -44,6 +43,9 @@ managedNodeGroups:
   desiredCapacity: 2
   minSize: 1
   maxSize: 10
+
+addons:
+- name: eks-pod-identity-agent
 
 ## Optionally run on fargate
 # fargateProfiles:
