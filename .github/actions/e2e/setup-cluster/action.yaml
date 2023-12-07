@@ -46,6 +46,17 @@ runs:
   - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
     with:
       ref: ${{ inputs.git_ref }}
+  - name: update aws-cli
+    shell: bash
+    run: |
+      aws --version
+      sudo rm -rf /usr/local/aws
+      sudo rm /usr/local/bin/aws
+      sudo rm -rf /usr/local/aws-cli/v2/current
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+      unzip awscliv2.zip
+      sudo ./aws/install
+      aws --version
   - uses: ./.github/actions/e2e/install-eksctl
     with:
       version: ${{ inputs.eksctl_version }}
