@@ -85,6 +85,33 @@ runs:
       if [[ "$GIT_REF" == '' ]]; then 
         GIT_REF=$(git rev-parse HEAD)
       fi
+
+      if [[ "$K8S_VERSION" == '1.23' ]]; then 
+        KARPENTER_IAM="""
+        serviceAccounts:
+          - metadata:
+              name: karpenter
+              namespace: kube-system
+            attachPolicyARNs:
+              - "arn:aws:iam::${{ inputs.account_id }}:policy/KarpenterControllerPolicy-${{ inputs.cluster_name }}"
+            permissionsBoundary: "arn:aws:iam::${{ inputs.account_id }}:policy/GithubActionsPermissionsBoundary"
+            roleName: karpenter-irsa-${{ inputs.cluster_name }}
+            roleOnly: true
+        """
+      else
+        KARPENTER_IAM="""
+      podIdentityAssociations:
+        - namespace: kube-system
+          serviceAccountName: karpenter
+          roleName: karpenter-irsa-${{ inputs.cluster_name }}
+          permissionsBoundaryARN: "arn:aws:iam::${{ inputs.account_id }}:policy/GithubActionsPermissionsBoundary"
+          permissionPolicyARNs: 
+            - "arn:aws:iam::${{ inputs.account_id }}:policy/KarpenterControllerPolicy-${{ inputs.cluster_name }}"
+      """
+      fi 
+
+      echo $KARPENTER_IAM
+
       # Create or Upgrade the cluster based on whether the cluster already exists
       cmd="create"
       eksctl get cluster --name "$CLUSTER_NAME" && cmd="upgrade"
