@@ -75,6 +75,18 @@ runs:
       cmd="create"
       eksctl get cluster --name ${{ inputs.cluster_name }} && cmd="upgrade"
 
+      karpenterIAM=(cat << EOF
+        podIdentityAssociations:
+          - namespace: kube-system
+            serviceAccountName: karpenter
+            roleName: karpenter-irsa-${{ inputs.cluster_name }}
+            permissionsBoundaryARN: "arn:aws:iam::${{ inputs.account_id }}:policy/GithubActionsPermissionsBoundary"
+            permissionPolicyARNs: 
+              - "arn:aws:iam::${{ inputs.account_id }}:policy/KarpenterControllerPolicy-${{ inputs.cluster_name }}"
+      EOF)
+
+      echo karpenterIAM
+
       cat << EOF >> clusterconfig.yaml
       ---
       apiVersion: eksctl.io/v1alpha5
