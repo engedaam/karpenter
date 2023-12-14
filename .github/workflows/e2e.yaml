@@ -97,10 +97,10 @@ jobs:
           role-to-assume: arn:aws:iam::${{ vars.CI_ACCOUNT_ID }}:role/${{ vars.CI_ROLE_NAME }}
           aws-region: ${{ inputs.region }}
           role-duration-seconds: 21600
-      - name: add jitter on cluster setup
-        run: |
-          # Creating jitter so that we can stagger cluster creation to avoid throttling
-          sleep $(( RANDOM % 300 + 1 ))
+      # - name: add jitter on cluster setup
+      #   run: |
+      #     # Creating jitter so that we can stagger cluster creation to avoid throttling
+      #     sleep $(( RANDOM % 300 + 1 ))
       - id: generate-cluster-name
         name: generate cluster name
         env:
