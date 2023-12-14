@@ -82,6 +82,12 @@ runs:
       PRIVATE_CLUSTER: ${{ inputs.private_cluster }}
       GIT_REF:  ${{ inputs.git_ref }}
     run: |
+      if [[ "$GIT_REF" == '' ]]; then 
+        REF=$(git rev-parse --short "$GITHUB_SHA")
+      else 
+        REF=$GIT_REF
+      fi 
+      echo "$REF"
       # Create or Upgrade the cluster based on whether the cluster already exists
       cmd="create"
       eksctl get cluster --name "$CLUSTER_NAME" && cmd="upgrade"
@@ -99,7 +105,7 @@ runs:
           github.com/run-url: "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           testing/type: "e2e"
           testing/cluster: "$CLUSTER_NAME"
-          test/git_ref: "$GIT_REF"
+          test/git_ref: "$REF"
       kubernetesNetworkConfig:
         ipFamily: "$IP_FAMILY"
       managedNodeGroups:
@@ -188,12 +194,18 @@ runs:
     env:
       ACCOUNT_ID: ${{ inputs.account_id }}
       CLUSTER_NAME: ${{ inputs.cluster_name }}
-      GIT_REF:  ${{ inputs.git_ref }}
+      GIT_REF: ${{ inputs.git_ref }}
     run: |
+      if [[ "$GIT_REF" == '' ]]; then 
+        REF=$(git rev-parse --short "$GITHUB_SHA")
+      else 
+        REF=$GIT_REF
+      fi 
+      echo "$REF"
       oidc_id=$(aws eks describe-cluster --name "$CLUSTER_NAME" --query "cluster.identity.oidc.issuer" --output text | cut -d '/' -f 3,4,5)
       arn="arn:aws:iam::$ACCOUNT_ID:oidc-provider/${oidc_id}"
       aws iam tag-open-id-connect-provider --open-id-connect-provider-arn $arn \
-         --tags Key=test/git_ref,Values="$GIT_REF" Key=testing/type,Value=e2e Key=testing/cluster,Value=$CLUSTER_NAME Key=github.com/run-url,Value=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+         --tags Key=test/git_ref,Values="$REF" Key=testing/type,Value=e2e Key=testing/cluster,Value=$CLUSTER_NAME Key=github.com/run-url,Value=https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
   - name: give KarpenterNodeRole permission to bootstrap
     shell: bash
     env:
