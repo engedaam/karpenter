@@ -63,9 +63,15 @@ runs:
         WEBHOOK_ENABLED=true
       fi
 
+      if [[ "$K8S_VERSION" == '1.23' ]]; then 
+        KARPENTER_IAM_ROLE_ARN ?= arn:aws:iam::$AWS_ACCOUNT_ID:role/$CLUSTER_NAME-karpenter
+        SERVICEACCOUNT ?= --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${KARPENTER_IAM_ROLE_ARN}
+      fi
+
       helm upgrade --install karpenter "oci://$ECR_ACCOUNT_ID.dkr.ecr.$ECR_REGION.amazonaws.com/karpenter/snapshot/karpenter" \
         -n kube-system \
         --version "v0-$(git rev-parse HEAD)" \
+        $SERVICEACCOUNT \
         --set webhook.enabled=${WEBHOOK_ENABLED} \
         --set settings.clusterName="$CLUSTER_NAME" \
         --set settings.interruptionQueue="$CLUSTER_NAME" \
