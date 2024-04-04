@@ -30,7 +30,7 @@ inputs:
     default: "1.29"
   eksctl_version:
     description: "Version of eksctl to install"
-    default: v0.169.0
+    default: v0.175.0
   ip_family:
     description: "IP Family of the cluster. Valid values are IPv4 or IPv6"
     default: "IPv4"
@@ -152,6 +152,8 @@ runs:
           minSize: 2
           maxSize: 2
           iam:
+            withAddonPolicies:
+              cloudWatch: true
             instanceRolePermissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
           taints:
           - key: CriticalAddonsOnly
@@ -175,6 +177,7 @@ runs:
         $KARPENTER_IAM
         withOIDC: true
       addons:
+      - name: amazon-cloudwatch-observability
       - name: vpc-cni
         permissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
       - name: coredns
@@ -269,3 +272,13 @@ runs:
       k8s_version: ${{ inputs.k8s_version }}
       git_ref: ${{ inputs.git_ref }}
       private_cluster: ${{ inputs.private_cluster }}
+  - name: log retention policy
+    shell: bash
+    if: ${{ inputs.private_cluster == 'false' }}
+    env:
+      CLUSTER_NAME: ${{ inputs.cluster_name }}
+    run: |
+      aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/application --retention-in-days 30
+      aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/dataplane --retention-in-days 30
+      aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/host --retention-in-days 30
+      aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/performance --retention-in-days 30
