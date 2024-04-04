@@ -152,6 +152,8 @@ runs:
           minSize: 2
           maxSize: 2
           iam:
+            withAddonPolicies:
+              cloudWatch: true
             instanceRolePermissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
           taints:
           - key: CriticalAddonsOnly
@@ -175,6 +177,8 @@ runs:
         $KARPENTER_IAM
         withOIDC: true
       addons:
+      - name: amazon-cloudwatch-observability
+        permissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
       - name: vpc-cni
         permissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
       - name: coredns
