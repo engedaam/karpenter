@@ -152,6 +152,8 @@ runs:
           minSize: 2
           maxSize: 2
           iam:
+            withAddonPolicies:
+              cloudWatch: true
             instanceRolePermissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
           taints:
           - key: CriticalAddonsOnly
@@ -175,6 +177,8 @@ runs:
         $KARPENTER_IAM
         withOIDC: true
       addons:
+      - name: amazon-cloudwatch-observability
+        permissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
       - name: vpc-cni
         permissionsBoundary: "arn:aws:iam::$ACCOUNT_ID:policy/GithubActionsPermissionsBoundary"
       - name: coredns
@@ -269,3 +273,12 @@ runs:
       k8s_version: ${{ inputs.k8s_version }}
       git_ref: ${{ inputs.git_ref }}
       private_cluster: ${{ inputs.private_cluster }}
+  - name: log retention policy
+     if: ${{ inputs.private_cluster == 'false' }}
+     env:
+       CLUSTER_NAME: ${{ inputs.cluster_name }}
+     run: |
+       aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/application --retention-in-days 30
+       aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/dataplane --retention-in-days 30
+       aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/host --retention-in-days 30
+       aws logs put-retention-policy --log-group-name /aws/containerinsights/$CLUSTER_NAME/performance --retention-in-days 30
