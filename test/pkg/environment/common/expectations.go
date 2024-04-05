@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -134,7 +135,7 @@ func (env *Environment) ExpectSettingsReplaced(vars ...v1.EnvVar) {
 
 	if !equality.Semantic.DeepEqual(d, stored) {
 		By("replacing environment variables for karpenter deployment")
-		Expect(env.Client.Patch(env.Context, d, client.MergeFrom(stored))).To(Succeed())
+		Expect(env.Client.Patch(env.Context, d, client.StrategicMergeFrom(stored))).To(Succeed())
 		env.EventuallyExpectKarpenterRestarted()
 	}
 }
@@ -158,7 +159,7 @@ func (env *Environment) ExpectSettingsOverridden(vars ...v1.EnvVar) {
 	}
 	if !equality.Semantic.DeepEqual(d, stored) {
 		By("overriding environment variables for karpenter deployment")
-		Expect(env.Client.Patch(env.Context, d, client.MergeFrom(stored))).To(Succeed())
+		Expect(env.Client.Patch(env.Context, d, client.StrategicMergeFrom(stored))).To(Succeed())
 		env.EventuallyExpectKarpenterRestarted()
 	}
 }
@@ -178,7 +179,7 @@ func (env *Environment) ExpectSettingsRemoved(vars ...v1.EnvVar) {
 	})
 	if !equality.Semantic.DeepEqual(d, stored) {
 		By("removing environment variables for karpenter deployment")
-		Expect(env.Client.Patch(env.Context, d, client.MergeFrom(stored))).To(Succeed())
+		Expect(env.Client.Patch(env.Context, d, client.StrategicMergeFrom(stored))).To(Succeed())
 		env.EventuallyExpectKarpenterRestarted()
 	}
 }
@@ -260,11 +261,12 @@ func (env *Environment) ExpectPrefixDelegationDisabled() {
 		"ENABLE_PREFIX_DELEGATION", "false", "aws-node")
 }
 
-func (env *Environment) ExpectExists(obj client.Object) {
+func (env *Environment) ExpectExists(obj client.Object) client.Object {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {
 		g.Expect(env.Client.Get(env, client.ObjectKeyFromObject(obj), obj)).To(Succeed())
 	}).WithTimeout(time.Second * 5).Should(Succeed())
+	return obj
 }
 
 func (env *Environment) EventuallyExpectBound(pods ...*v1.Pod) {
@@ -327,7 +329,7 @@ func (env *Environment) EventuallyExpectRollout(name, namespace string) {
 		"kubectl.kubernetes.io/restartedAt": time.Now().Format(time.RFC3339),
 	}
 	deploy.Spec.Template.Annotations = lo.Assign(deploy.Spec.Template.Annotations, restartedAtAnnotation)
-	Expect(env.Client.Patch(env.Context, deploy, client.MergeFrom(stored))).To(Succeed())
+	Expect(env.Client.Patch(env.Context, deploy, client.StrategicMergeFrom(stored))).To(Succeed())
 
 	By("waiting for the newly generated deployment to rollout")
 	Eventually(func(g Gomega) {
@@ -468,13 +470,35 @@ func (env *Environment) ExpectCreatedNodeCount(comparator string, count int) []*
 	return createdNodes
 }
 
+func (env *Environment) ExpectNodeCount(comparator string, count int) {
+	GinkgoHelper()
+
+	nodeList := &v1.NodeList{}
+	Expect(env.Client.List(env, nodeList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
+	Expect(len(nodeList.Items)).To(BeNumerically(comparator, count))
+}
+
+func (env *Environment) ExpectNodeClaimCount(comparator string, count int) {
+	GinkgoHelper()
+
+	nodeClaimList := &corev1beta1.NodeClaimList{}
+	Expect(env.Client.List(env, nodeClaimList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
+	Expect(len(nodeClaimList.Items)).To(BeNumerically(comparator, count))
+}
+
+func NodeClaimNames(nodeClaims []*corev1beta1.NodeClaim) []string {
+	return lo.Map(nodeClaims, func(n *corev1beta1.NodeClaim, index int) string {
+		return n.Name
+	})
+}
+
 func NodeNames(nodes []*v1.Node) []string {
 	return lo.Map(nodes, func(n *v1.Node, index int) string {
 		return n.Name
 	})
 }
 
-func (env *Environment) ConsistentlyExpectNodeCount(comparator string, count int, duration string) []*v1.Node {
+func (env *Environment) ConsistentlyExpectNodeCount(comparator string, count int, duration time.Duration) []*v1.Node {
 	GinkgoHelper()
 	By(fmt.Sprintf("expecting nodes to be %s to %d for %s", comparator, count, duration))
 	nodeList := &v1.NodeList{}
@@ -482,29 +506,38 @@ func (env *Environment) ConsistentlyExpectNodeCount(comparator string, count int
 		g.Expect(env.Client.List(env, nodeList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
 		g.Expect(len(nodeList.Items)).To(BeNumerically(comparator, count),
 			fmt.Sprintf("expected %d nodes, had %d (%v) for %s", count, len(nodeList.Items), NodeNames(lo.ToSlicePtr(nodeList.Items)), duration))
-	}, duration).Should(Succeed())
+	}, duration.String()).Should(Succeed())
 	return lo.ToSlicePtr(nodeList.Items)
 }
 
-func (env *Environment) ConsistentlyExpectNoDisruptions(nodeCount int, duration string) {
+func (env *Environment) ConsistentlyExpectNoDisruptions(nodeCount int, duration time.Duration) (taintedNodes []*v1.Node) {
 	GinkgoHelper()
+	return env.ConsistentlyExpectDisruptionsWithNodeCount(0, nodeCount, duration)
+}
+
+// ConsistentlyExpectDisruptionsWithNodeCount will continually ensure that there are exactly disruptingNodes with totalNodes (including replacements and existing nodes)
+func (env *Environment) ConsistentlyExpectDisruptionsWithNodeCount(disruptingNodes, totalNodes int, duration time.Duration) (taintedNodes []*v1.Node) {
+	GinkgoHelper()
+	nodes := []v1.Node{}
 	Consistently(func(g Gomega) {
 		// Ensure we don't change our NodeClaims
 		nodeClaimList := &corev1beta1.NodeClaimList{}
 		g.Expect(env.Client.List(env, nodeClaimList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
-		g.Expect(nodeClaimList.Items).To(HaveLen(nodeCount))
+		g.Expect(nodeClaimList.Items).To(HaveLen(totalNodes))
 
 		nodeList := &v1.NodeList{}
 		g.Expect(env.Client.List(env, nodeList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
-		g.Expect(nodeList.Items).To(HaveLen(nodeCount))
+		g.Expect(nodeList.Items).To(HaveLen(totalNodes))
 
-		for _, node := range nodeList.Items {
-			_, ok := lo.Find(node.Spec.Taints, func(t v1.Taint) bool {
+		nodes = lo.Filter(nodeList.Items, func(n v1.Node, _ int) bool {
+			_, ok := lo.Find(n.Spec.Taints, func(t v1.Taint) bool {
 				return corev1beta1.IsDisruptingTaint(t)
 			})
-			g.Expect(ok).To(BeFalse())
-		}
+			return ok
+		})
+		g.Expect(nodes).To(HaveLen(disruptingNodes))
 	}, duration).Should(Succeed())
+	return lo.ToSlicePtr(nodes)
 }
 
 func (env *Environment) EventuallyExpectTaintedNodeCount(comparator string, count int) []*v1.Node {
@@ -528,6 +561,18 @@ func (env *Environment) EventuallyExpectNodesUntaintedWithTimeout(timeout time.D
 		taintedNodeNames := lo.Map(nodeList.Items, func(n v1.Node, _ int) string { return n.Name })
 		g.Expect(taintedNodeNames).ToNot(ContainElements(lo.Map(nodes, func(n *v1.Node, _ int) interface{} { return n.Name })...))
 	}).WithTimeout(timeout).Should(Succeed())
+}
+
+func (env *Environment) EventuallyExpectNodeClaimCount(comparator string, count int) []*corev1beta1.NodeClaim {
+	GinkgoHelper()
+	By(fmt.Sprintf("waiting for nodes to be %s to %d", comparator, count))
+	nodeClaimList := &corev1beta1.NodeClaimList{}
+	Eventually(func(g Gomega) {
+		g.Expect(env.Client.List(env, nodeClaimList, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
+		g.Expect(len(nodeClaimList.Items)).To(BeNumerically(comparator, count),
+			fmt.Sprintf("expected %d nodeclaims, had %d (%v)", count, len(nodeClaimList.Items), NodeClaimNames(lo.ToSlicePtr(nodeClaimList.Items))))
+	}).Should(Succeed())
+	return lo.ToSlicePtr(nodeClaimList.Items)
 }
 
 func (env *Environment) EventuallyExpectNodeCount(comparator string, count int) []*v1.Node {
@@ -651,6 +696,18 @@ func (env *Environment) EventuallyExpectDrifted(nodeClaims ...*corev1beta1.NodeC
 	}).Should(Succeed())
 }
 
+func (env *Environment) ConsistentlyExpectNodeClaimsNotDrifted(duration time.Duration, nodeClaims ...*corev1beta1.NodeClaim) {
+	GinkgoHelper()
+	nodeClaimNames := lo.Map(nodeClaims, func(nc *corev1beta1.NodeClaim, _ int) string { return nc.Name })
+	By(fmt.Sprintf("consistently expect nodeclaims %s not to be drifted for %s", nodeClaimNames, duration))
+	Consistently(func(g Gomega) {
+		for _, nc := range nodeClaims {
+			g.Expect(env.Client.Get(env, client.ObjectKeyFromObject(nc), nc)).To(Succeed())
+			g.Expect(nc.StatusConditions().GetCondition(corev1beta1.Drifted)).To(BeNil())
+		}
+	}, duration).Should(Succeed())
+}
+
 func (env *Environment) EventuallyExpectEmpty(nodeClaims ...*corev1beta1.NodeClaim) {
 	GinkgoHelper()
 	Eventually(func(g Gomega) {
@@ -694,7 +751,7 @@ func (env *Environment) printControllerLogs(options *v1.PodLogOptions) {
 		temp := options.DeepCopy() // local version of the log options
 
 		fmt.Printf("------- pod/%s -------\n", pod.Name)
-		if pod.Status.ContainerStatuses[0].RestartCount > 0 {
+		if len(pod.Status.ContainerStatuses) > 0 && pod.Status.ContainerStatuses[0].RestartCount > 0 {
 			fmt.Printf("[PREVIOUS CONTAINER LOGS]\n")
 			temp.Previous = true
 		}
@@ -732,7 +789,7 @@ func (env *Environment) ExpectDaemonSetEnvironmentVariableUpdated(obj client.Obj
 		Expect(len(ds.Spec.Template.Spec.Containers)).To(BeNumerically("==", 1))
 		containers = append(containers, ds.Spec.Template.Spec.Containers[0].Name)
 	}
-	patch := client.MergeFrom(ds.DeepCopy())
+	patch := client.StrategicMergeFrom(ds.DeepCopy())
 	containerNames := sets.New(containers...)
 	for ci := range ds.Spec.Template.Spec.Containers {
 		c := &ds.Spec.Template.Spec.Containers[ci]
@@ -751,17 +808,63 @@ func (env *Environment) ExpectDaemonSetEnvironmentVariableUpdated(obj client.Obj
 	Expect(env.Client.Patch(env.Context, ds, patch)).To(Succeed())
 }
 
-func (env *Environment) ExpectHealthyPodsForNode(nodeName string) []*v1.Pod {
+// ForcePodsToSpread ensures that currently scheduled pods get spread evenly across all passed nodes by deleting pods off of existing
+// nodes and waiting them to reschedule. This is useful for scenarios where you want to force the nodes be underutilized
+// but you want to keep a consistent count of nodes rather than leaving around empty ones.
+func (env *Environment) ForcePodsToSpread(nodes ...*v1.Node) {
+	GinkgoHelper()
+
+	// Get the total count of pods across
+	podCount := 0
+	for _, n := range nodes {
+		podCount += len(env.ExpectActivePodsForNode(n.Name))
+	}
+	maxPodsPerNode := int(math.Ceil(float64(podCount) / float64(len(nodes))))
+
+	By(fmt.Sprintf("forcing %d pods to spread across %d nodes", podCount, len(nodes)))
+	start := time.Now()
+	for {
+		var nodePods []*v1.Pod
+		node, found := lo.Find(nodes, func(n *v1.Node) bool {
+			nodePods = env.ExpectActivePodsForNode(n.Name)
+			return len(nodePods) > maxPodsPerNode
+		})
+		if !found {
+			break
+		}
+		// Set the nodes to unschedulable so that the pods won't reschedule.
+		Expect(env.Client.Get(env.Context, client.ObjectKeyFromObject(node), node)).To(Succeed())
+		stored := node.DeepCopy()
+		node.Spec.Unschedulable = true
+		Expect(env.Client.Patch(env.Context, node, client.StrategicMergeFrom(stored))).To(Succeed())
+		for _, pod := range nodePods[maxPodsPerNode:] {
+			env.ExpectDeleted(pod)
+		}
+		Eventually(func(g Gomega) {
+			g.Expect(len(env.ExpectActivePodsForNode(node.Name))).To(Or(Equal(maxPodsPerNode), Equal(maxPodsPerNode-1)))
+		}).WithTimeout(5 * time.Second).Should(Succeed())
+
+		// TODO: Consider moving this time check to an Eventually poll. This gets a little tricker with helper functions
+		// since you need to make sure that your Expectation helper functions are scoped to to your "g Gomega" scope
+		// so that you don't fail the first time you get a failure on your expectation
+		if time.Since(start) > time.Minute*15 {
+			Fail("forcing pods to spread failed due to a timeout")
+		}
+	}
+	for _, n := range nodes {
+		stored := n.DeepCopy()
+		n.Spec.Unschedulable = false
+		Expect(env.Client.Patch(env.Context, n, client.StrategicMergeFrom(stored))).To(Succeed())
+	}
+}
+
+func (env *Environment) ExpectActivePodsForNode(nodeName string) []*v1.Pod {
 	GinkgoHelper()
 	podList := &v1.PodList{}
 	Expect(env.Client.List(env, podList, client.MatchingFields{"spec.nodeName": nodeName}, client.HasLabels{test.DiscoveryLabel})).To(Succeed())
 
-	// Return the healthy pods
 	return lo.Filter(lo.ToSlicePtr(podList.Items), func(p *v1.Pod, _ int) bool {
-		_, found := lo.Find(p.Status.Conditions, func(cond v1.PodCondition) bool {
-			return cond.Type == v1.PodReady && cond.Status == v1.ConditionTrue
-		})
-		return found
+		return p.DeletionTimestamp.IsZero()
 	})
 }
 

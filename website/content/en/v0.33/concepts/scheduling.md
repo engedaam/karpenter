@@ -214,7 +214,7 @@ All examples below assume that the NodePool doesn't have constraints to prevent 
          - matchExpressions:
            - key: "topology.kubernetes.io/zone"
              operator: "In"
-             values: ["us-west-2a, us-west-2b"]
+             values: ["us-west-2a", "us-west-2b"]
            - key: "topology.kubernetes.io/zone"
              operator: "In"
              values: ["us-west-2b"]
@@ -225,7 +225,7 @@ Changing the second operator to `NotIn` would allow the pod to run in `us-west-2
 ```yaml
            - key: "topology.kubernetes.io/zone"
              operator: "In"
-             values: ["us-west-2a, us-west-2b"]
+             values: ["us-west-2a", "us-west-2b"]
            - key: "topology.kubernetes.io/zone"
              operator: "NotIn"
              values: ["us-west-2b"]
@@ -243,7 +243,7 @@ Here, if `us-west-2a` is not available, the second term will cause the pod to ru
          - matchExpressions: # OR
            - key: "topology.kubernetes.io/zone" # AND
              operator: "In"
-             values: ["us-west-2a, us-west-2b"]
+             values: ["us-west-2a", "us-west-2b"]
            - key: "topology.kubernetes.io/zone" # AND
              operator: "NotIn"
              values: ["us-west-2b"]
@@ -351,6 +351,10 @@ The three supported `topologyKey` values that Karpenter supports are:
 
 
 See [Pod Topology Spread Constraints](https://kubernetes.io/docs/concepts/workloads/pods/pod-topology-spread-constraints/) for details.
+
+{{% alert title="Note" color="primary" %}}
+NodePools do not attempt to balance or rebalance the availability zones for their nodes. Availability zone balancing may be achieved by defining zonal Topology Spread Constraints for Pods that require multi-zone durability, and NodePools will respect these constraints while optimizing for compute costs.
+{{% /alert %}}
 
 ## Pod affinity/anti-affinity
 
