@@ -26,6 +26,9 @@ import (
 
 	corev1beta1 "sigs.k8s.io/karpenter/pkg/apis/v1beta1"
 
+	"github.com/aws/aws-sdk-go/service/ssm"
+	"github.com/samber/lo"
+
 	"github.com/aws/karpenter-provider-aws/test/pkg/environment/aws"
 
 	"sigs.k8s.io/karpenter/pkg/test"
@@ -33,6 +36,7 @@ import (
 	"github.com/aws/karpenter-provider-aws/pkg/apis/v1beta1"
 
 	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("KubeletConfiguration Overrides", func() {
@@ -42,15 +46,15 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 			nodePool.Spec.Template.Spec.Kubelet = &corev1beta1.KubeletConfiguration{
 				MaxPods:     ptr.Int32(110),
 				PodsPerCore: ptr.Int32(10),
-				SystemReserved: v1.ResourceList{
-					v1.ResourceCPU:              resource.MustParse("200m"),
-					v1.ResourceMemory:           resource.MustParse("200Mi"),
-					v1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
+				SystemReserved: map[string]string{
+					string(v1.ResourceCPU):              "200m",
+					string(v1.ResourceMemory):           "200Mi",
+					string(v1.ResourceEphemeralStorage): "1Gi",
 				},
-				KubeReserved: v1.ResourceList{
-					v1.ResourceCPU:              resource.MustParse("200m"),
-					v1.ResourceMemory:           resource.MustParse("200Mi"),
-					v1.ResourceEphemeralStorage: resource.MustParse("1Gi"),
+				KubeReserved: map[string]string{
+					string(v1.ResourceCPU):              "200m",
+					string(v1.ResourceMemory):           "200Mi",
+					string(v1.ResourceEphemeralStorage): "1Gi",
 				},
 				EvictionHard: map[string]string{
 					"memory.available":   "5%",
@@ -85,6 +89,17 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 		DescribeTable("Linux AMIFamilies",
 			func(amiFamily *string) {
 				nodeClass.Spec.AMIFamily = amiFamily
+				// TODO (jmdeal@): remove once 22.04 AMIs are supported
+				if *amiFamily == v1beta1.AMIFamilyUbuntu && env.GetK8sVersion(0) == "1.29" {
+					nodeClass.Spec.AMISelectorTerms = lo.Map([]string{
+						"/aws/service/canonical/ubuntu/eks/20.04/1.28/stable/current/amd64/hvm/ebs-gp2/ami-id",
+						"/aws/service/canonical/ubuntu/eks/20.04/1.28/stable/current/arm64/hvm/ebs-gp2/ami-id",
+					}, func(arg string, _ int) v1beta1.AMISelectorTerm {
+						parameter, err := env.SSMAPI.GetParameter(&ssm.GetParameterInput{Name: lo.ToPtr(arg)})
+						Expect(err).To(BeNil())
+						return v1beta1.AMISelectorTerm{ID: *parameter.Parameter.Value}
+					})
+				}
 				pod := test.Pod(test.PodOptions{
 					NodeSelector: map[string]string{
 						v1.LabelOSStable:   string(v1.Linux),
@@ -96,6 +111,7 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 				env.ExpectCreatedNodeCount("==", 1)
 			},
 			Entry("when the AMIFamily is AL2", &v1beta1.AMIFamilyAL2),
+			Entry("when the AMIFamily is AL2023", &v1beta1.AMIFamilyAL2023),
 			Entry("when the AMIFamily is Ubuntu", &v1beta1.AMIFamilyUbuntu),
 			Entry("when the AMIFamily is Bottlerocket", &v1beta1.AMIFamilyBottlerocket),
 		)
@@ -112,15 +128,19 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 				// properly scoped
 				// TODO: remove this requirement once VPC RC rolls out m7a.*, r7a.*, c7a.* ENI data (https://github.com/aws/karpenter-provider-aws/issues/4472)
 				test.ReplaceRequirements(nodePool,
-					v1.NodeSelectorRequirement{
-						Key:      v1beta1.LabelInstanceFamily,
-						Operator: v1.NodeSelectorOpNotIn,
-						Values:   aws.ExcludedInstanceFamilies,
+					corev1beta1.NodeSelectorRequirementWithMinValues{
+						NodeSelectorRequirement: v1.NodeSelectorRequirement{
+							Key:      v1beta1.LabelInstanceFamily,
+							Operator: v1.NodeSelectorOpNotIn,
+							Values:   aws.ExcludedInstanceFamilies,
+						},
 					},
-					v1.NodeSelectorRequirement{
-						Key:      v1.LabelOSStable,
-						Operator: v1.NodeSelectorOpIn,
-						Values:   []string{string(v1.Windows)},
+					corev1beta1.NodeSelectorRequirementWithMinValues{
+						NodeSelectorRequirement: v1.NodeSelectorRequirement{
+							Key:      v1.LabelOSStable,
+							Operator: v1.NodeSelectorOpIn,
+							Values:   []string{string(v1.Windows)},
+						},
 					},
 				)
 				pod := test.Pod(test.PodOptions{
@@ -168,10 +188,12 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 		// PodsPerCore needs to account for the daemonsets that will run on the nodes
 		// This will have 4 pods available on each node (2 taken by daemonset pods)
 		test.ReplaceRequirements(nodePool,
-			v1.NodeSelectorRequirement{
-				Key:      v1beta1.LabelInstanceCPU,
-				Operator: v1.NodeSelectorOpIn,
-				Values:   []string{"2"},
+			corev1beta1.NodeSelectorRequirementWithMinValues{
+				NodeSelectorRequirement: v1.NodeSelectorRequirement{
+					Key:      v1beta1.LabelInstanceCPU,
+					Operator: v1.NodeSelectorOpIn,
+					Values:   []string{"2"},
+				},
 			},
 		)
 		numPods := 4
@@ -211,10 +233,12 @@ var _ = Describe("KubeletConfiguration Overrides", func() {
 		// All pods should schedule to a single node since we are ignoring podsPerCore value
 		// This would normally schedule to 3 nodes if not using Bottlerocket
 		test.ReplaceRequirements(nodePool,
-			v1.NodeSelectorRequirement{
-				Key:      v1beta1.LabelInstanceCPU,
-				Operator: v1.NodeSelectorOpIn,
-				Values:   []string{"2"},
+			corev1beta1.NodeSelectorRequirementWithMinValues{
+				NodeSelectorRequirement: v1.NodeSelectorRequirement{
+					Key:      v1beta1.LabelInstanceCPU,
+					Operator: v1.NodeSelectorOpIn,
+					Values:   []string{"2"},
+				},
 			},
 		)
 
