@@ -69,7 +69,7 @@ var _ = Describe("Emptiness", func() {
 			env.ExpectDeleted(dep)
 
 			env.EventuallyExpectEmpty(nodeClaim)
-			env.ConsistentlyExpectNoDisruptions(1, "1m")
+			env.ConsistentlyExpectNoDisruptions(1, time.Minute)
 		})
 		It("should not allow emptiness if the budget is fully blocking during a scheduled time", func() {
 			// We're going to define a budget that doesn't allow any emptiness disruption to happen
@@ -93,7 +93,7 @@ var _ = Describe("Emptiness", func() {
 			env.ExpectDeleted(dep)
 
 			env.EventuallyExpectEmpty(nodeClaim)
-			env.ConsistentlyExpectNoDisruptions(1, "1m")
+			env.ConsistentlyExpectNoDisruptions(1, time.Minute)
 		})
 	})
 	It("should terminate an empty node", func() {
@@ -111,7 +111,7 @@ var _ = Describe("Emptiness", func() {
 		By("making the nodeclaim empty")
 		persisted := deployment.DeepCopy()
 		deployment.Spec.Replicas = ptr.Int32(0)
-		Expect(env.Client.Patch(env, deployment, client.MergeFrom(persisted))).To(Succeed())
+		Expect(env.Client.Patch(env, deployment, client.StrategicMergeFrom(persisted))).To(Succeed())
 
 		env.EventuallyExpectEmpty(nodeClaim)
 

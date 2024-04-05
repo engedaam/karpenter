@@ -47,7 +47,6 @@ func main() {
 		WithControllers(ctx, corecontrollers.NewControllers(
 			op.Clock,
 			op.GetClient(),
-			op.KubernetesInterface,
 			state.NewCluster(op.Clock, op.GetClient(), cloudProvider),
 			op.EventRecorder,
 			cloudProvider,
@@ -60,7 +59,7 @@ func main() {
 			op.GetClient(),
 			op.EventRecorder,
 			op.UnavailableOfferingsCache,
-			awsCloudProvider,
+			cloudProvider,
 			op.SubnetProvider,
 			op.SecurityGroupProvider,
 			op.InstanceProfileProvider,

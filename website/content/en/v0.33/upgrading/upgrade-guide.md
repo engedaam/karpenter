@@ -28,9 +28,9 @@ If you get the error `invalid ownership metadata; label validation error:` while
 In general, you can reapply the CRDs in the `crds` directory of the Karpenter helm chart:
 
 ```shell
-kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.1/pkg/apis/crds/karpenter.sh_nodepools.yaml
-kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.1/pkg/apis/crds/karpenter.sh_nodeclaims.yaml
-kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.1/pkg/apis/crds/karpenter.k8s.aws_ec2nodeclasses.yaml
+kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.4/pkg/apis/crds/karpenter.sh_nodepools.yaml
+kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.4/pkg/apis/crds/karpenter.sh_nodeclaims.yaml
+kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0.33.4/pkg/apis/crds/karpenter.k8s.aws_ec2nodeclasses.yaml
 ```
 
 ### Upgrading to v0.33.0+
@@ -41,6 +41,7 @@ kubectl apply -f https://raw.githubusercontent.com/aws/karpenter-provider-aws/v0
 v0.33.0+ _only_ supports Karpenter v1beta1 APIs and will not work with existing Provisioner, AWSNodeTemplate or Machine alpha APIs. **Do not** upgrade to v0.33.0+ without first [upgrading to v0.32.x]({{<ref "#upgrading-to-v0320" >}}). This version supports both the alpha and beta APIs, allowing you to migrate all of your existing APIs to beta APIs without experiencing downtime.
 {{% /alert %}}
 
+* Karpenter no longer supports using the `karpenter.sh/provisioner-name` label in NodePool labels and requirements or in application node selectors, affinities, or topologySpreadConstraints. If you were previously using this label to target applications to specific Provisioners, you should update your applications to use the `karpenter.sh/nodepool` label instead before upgrading. If you upgrade without changing these labels, you may begin to see pod scheduling failures for these applications.
 * Karpenter now tags `spot-instances-request` with the same tags that it tags instances, volumes, and primary ENIs. This means that you will now need to add `ec2:CreateTags` permission for `spot-instances-request`. You can also further scope your controller policy for the `ec2:RunInstances` action to require that it launches the `spot-instances-request` with these specific tags. You can view an example of scoping these actions in the [Getting Started Guide's default CloudFormation controller policy](https://github.com/aws/karpenter/blob/v0.33.0/website/content/en/preview/getting-started/getting-started-with-karpenter/cloudformation.yaml#L61).
 * We now recommend that you set the installation namespace for your Karpenter controllers to `kube-system` to denote Karpenter as a critical cluster component. This ensures that requests from the Karpenter controllers are treated with higher priority by assigning them to a different [PriorityLevelConfiguration](https://kubernetes.io/docs/concepts/cluster-administration/flow-control/#prioritylevelconfiguration) than generic requests from other namespaces. For more details on API Priority and Fairness, read the [Kubernetes API Priority and Fairness Conceptual Docs](https://kubernetes.io/docs/concepts/cluster-administration/flow-control/). Note: Changing the namespace for your Karpenter release will cause the service account namespace to change. If you are using IRSA for authentication with AWS, you will need to change scoping set in the controller's trust policy from `karpenter:karpenter` to `kube-system:karpenter`.
 * `v0.33.x` disables mutating and validating webhooks by default in favor of using [Common Expression Language for CRD validation](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation). The Common Expression Language Validation Feature [is enabled by default on EKS 1.25](https://kubernetes.io/docs/tasks/extend-kubernetes/custom-resources/custom-resource-definitions/#validation-rules). If you are using Kubernetes version >= 1.25, no further action is required. If you are using a Kubernetes version below 1.25, you now need to set `DISABLE_WEBHOOK=false` in your container environment variables or `--set webhook.enabled=true` if using Helm. View the [Webhook Support Deprecated in Favor of CEL Section of the v1beta1 Migration Guide]({{<ref "../../v0.32/upgrading/v1beta1-migration#webhook-support-deprecated-in-favor-of-cel" >}}).
@@ -57,7 +58,7 @@ Karpenter v0.32.0 introduces v1beta1 APIs, including _significant_ changes to th
 
 This version includes **dual support** for both alpha and beta APIs to ensure that you can slowly migrate your existing Provisioner, AWSNodeTemplate, and Machine alpha APIs to the newer NodePool, EC2NodeClass, and NodeClaim beta APIs.
 
-Note that if you are rolling back after upgrading to v0.32.0, note that v0.31.2 and v0.31.3 are the only versions that support handling rollback after you have deployed the v1beta1 APIs to your cluster.
+Note that if you are rolling back after upgrading to v0.32.0, note that v0.31.4 is the only version that supports handling rollback after you have deployed the v1beta1 APIs to your cluster.
 {{% /alert %}}
 
 * Karpenter now serves the webhook prometheus metrics server on port `8001`. If this port is already in-use on the pod or you are running in `hostNetworking` mode, you may need to change this port value. You can configure this port value through the `WEBHOOK_METRICS_PORT` environment variable or the `webhook.metrics.port` value if installing via Helm.

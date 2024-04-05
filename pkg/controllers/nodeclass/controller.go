@@ -20,6 +20,8 @@ import (
 	"sort"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
+
 	"github.com/aws/karpenter-provider-aws/pkg/providers/launchtemplate"
 
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -51,6 +53,8 @@ import (
 	"github.com/aws/karpenter-provider-aws/pkg/providers/subnet"
 )
 
+var _ corecontroller.FinalizingTypedController[*v1beta1.EC2NodeClass] = (*Controller)(nil)
+
 type Controller struct {
 	kubeClient              client.Client
 	recorder                events.Recorder
@@ -62,8 +66,9 @@ type Controller struct {
 }
 
 func NewController(kubeClient client.Client, recorder events.Recorder, subnetProvider *subnet.Provider, securityGroupProvider *securitygroup.Provider,
-	amiProvider *amifamily.Provider, instanceProfileProvider *instanceprofile.Provider, launchTemplateProvider *launchtemplate.Provider) *Controller {
-	return &Controller{
+	amiProvider *amifamily.Provider, instanceProfileProvider *instanceprofile.Provider, launchTemplateProvider *launchtemplate.Provider) corecontroller.Controller {
+
+	return corecontroller.Typed[*v1beta1.EC2NodeClass](kubeClient, &Controller{
 		kubeClient:              kubeClient,
 		recorder:                recorder,
 		subnetProvider:          subnetProvider,
@@ -71,30 +76,45 @@ func NewController(kubeClient client.Client, recorder events.Recorder, subnetPro
 		amiProvider:             amiProvider,
 		instanceProfileProvider: instanceProfileProvider,
 		launchTemplateProvider:  launchTemplateProvider,
-	}
+	})
 }
 
 func (c *Controller) Reconcile(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) (reconcile.Result, error) {
 	stored := nodeClass.DeepCopy()
 	controllerutil.AddFinalizer(nodeClass, v1beta1.TerminationFinalizer)
-	nodeClass.Annotations = lo.Assign(nodeClass.Annotations, map[string]string{v1beta1.AnnotationEC2NodeClassHash: nodeClass.Hash()})
-	err := multierr.Combine(
+
+	if nodeClass.Annotations[v1beta1.AnnotationEC2NodeClassHashVersion] != v1beta1.EC2NodeClassHashVersion {
+		if err := c.updateNodeClaimHash(ctx, nodeClass); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	nodeClass.Annotations = lo.Assign(nodeClass.Annotations, map[string]string{
+		v1beta1.AnnotationEC2NodeClassHash:        nodeClass.Hash(),
+		v1beta1.AnnotationEC2NodeClassHashVersion: v1beta1.EC2NodeClassHashVersion,
+	})
+
+	errs := multierr.Combine(
 		c.resolveSubnets(ctx, nodeClass),
 		c.resolveSecurityGroups(ctx, nodeClass),
 		c.resolveAMIs(ctx, nodeClass),
 		c.resolveInstanceProfile(ctx, nodeClass),
 	)
-	if !equality.Semantic.DeepEqual(stored, nodeClass) {
-		statusCopy := nodeClass.DeepCopy()
-		if patchErr := c.kubeClient.Patch(ctx, nodeClass, client.MergeFrom(stored)); err != nil {
-			err = multierr.Append(err, client.IgnoreNotFound(patchErr))
-		}
-		if patchErr := c.kubeClient.Status().Patch(ctx, statusCopy, client.MergeFrom(stored)); err != nil {
-			err = multierr.Append(err, client.IgnoreNotFound(patchErr))
+	if lo.FromPtr(nodeClass.Spec.AMIFamily) == v1beta1.AMIFamilyAL2023 {
+		if err := c.launchTemplateProvider.ResolveClusterCIDR(ctx); err != nil {
+			errs = multierr.Append(errs, fmt.Errorf("resolving cluster CIDR, %w", err))
 		}
 	}
-	if err != nil {
-		return reconcile.Result{}, err
+	if !equality.Semantic.DeepEqual(stored, nodeClass) {
+		statusCopy := nodeClass.DeepCopy()
+		if err := c.kubeClient.Patch(ctx, nodeClass, client.MergeFrom(stored)); err != nil {
+			errs = multierr.Append(errs, client.IgnoreNotFound(err))
+		}
+		if err := c.kubeClient.Status().Patch(ctx, statusCopy, client.MergeFrom(stored)); err != nil {
+			errs = multierr.Append(errs, client.IgnoreNotFound(err))
+		}
+	}
+	if errs != nil {
+		return reconcile.Result{}, errs
 	}
 	return reconcile.Result{RequeueAfter: 5 * time.Minute}, nil
 }
@@ -122,7 +142,13 @@ func (c *Controller) Finalize(ctx context.Context, nodeClass *v1beta1.EC2NodeCla
 	}
 	controllerutil.RemoveFinalizer(nodeClass, v1beta1.TerminationFinalizer)
 	if !equality.Semantic.DeepEqual(stored, nodeClass) {
-		if err := c.kubeClient.Patch(ctx, nodeClass, client.MergeFrom(stored)); err != nil {
+		// We call Update() here rather than Patch() because patching a list with a JSON merge patch
+		// can cause races due to the fact that it fully replaces the list on a change
+		// https://github.com/kubernetes/kubernetes/issues/111643#issuecomment-2016489732
+		if err := c.kubeClient.Update(ctx, nodeClass); err != nil {
+			if errors.IsConflict(err) {
+				return reconcile.Result{Requeue: true}, nil
+			}
 			return reconcile.Result{}, client.IgnoreNotFound(fmt.Errorf("removing termination finalizer, %w", err))
 		}
 	}
@@ -214,25 +240,50 @@ func (c *Controller) resolveInstanceProfile(ctx context.Context, nodeClass *v1be
 	return nil
 }
 
-var _ corecontroller.FinalizingTypedController[*v1beta1.EC2NodeClass] = (*NodeClassController)(nil)
+// Updating `ec2nodeclass-hash-version` annotation inside the karpenter controller means a breaking change has been made to the hash calculation.
+// `ec2nodeclass-hash` annotation on the EC2NodeClass will be updated, due to the breaking change, making the `ec2nodeclass-hash` on the NodeClaim different from
+// EC2NodeClass. Since, we cannot rely on the `ec2nodeclass-hash` on the NodeClaims, due to the breaking change, we will need to re-calculate the hash and update the annotation.
+// For more information on the Drift Hash Versioning: https://github.com/kubernetes-sigs/karpenter/blob/main/designs/drift-hash-versioning.md
+func (c *Controller) updateNodeClaimHash(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) error {
+	ncList := &corev1beta1.NodeClaimList{}
+	if err := c.kubeClient.List(ctx, ncList, client.MatchingFields{"spec.nodeClassRef.name": nodeClass.Name}); err != nil {
+		return err
+	}
 
-//nolint:revive
-type NodeClassController struct {
-	*Controller
+	errs := make([]error, len(ncList.Items))
+	for i := range ncList.Items {
+		nc := ncList.Items[i]
+		stored := nc.DeepCopy()
+
+		if nc.Annotations[v1beta1.AnnotationEC2NodeClassHashVersion] != v1beta1.EC2NodeClassHashVersion {
+			nc.Annotations = lo.Assign(nc.Annotations, map[string]string{
+				v1beta1.AnnotationEC2NodeClassHashVersion: v1beta1.EC2NodeClassHashVersion,
+			})
+
+			// Any NodeClaim that is already drifted will remain drifted if the karpenter.k8s.aws/nodepool-hash-version doesn't match
+			// Since the hashing mechanism has changed we will not be able to determine if the drifted status of the NodeClaim has changed
+			if nc.StatusConditions().GetCondition(corev1beta1.Drifted) == nil {
+				nc.Annotations = lo.Assign(nc.Annotations, map[string]string{
+					v1beta1.AnnotationEC2NodeClassHash: nodeClass.Hash(),
+				})
+			}
+
+			if !equality.Semantic.DeepEqual(stored, nc) {
+				if err := c.kubeClient.Patch(ctx, &nc, client.MergeFrom(stored)); err != nil {
+					errs[i] = client.IgnoreNotFound(err)
+				}
+			}
+		}
+	}
+
+	return multierr.Combine(errs...)
 }
 
-func NewNodeClassController(kubeClient client.Client, recorder events.Recorder, subnetProvider *subnet.Provider, securityGroupProvider *securitygroup.Provider,
-	amiProvider *amifamily.Provider, instanceProfileProvider *instanceprofile.Provider, launchTemplateProvider *launchtemplate.Provider) corecontroller.Controller {
-	return corecontroller.Typed[*v1beta1.EC2NodeClass](kubeClient, &NodeClassController{
-		Controller: NewController(kubeClient, recorder, subnetProvider, securityGroupProvider, amiProvider, instanceProfileProvider, launchTemplateProvider),
-	})
-}
-
-func (c *NodeClassController) Name() string {
+func (c *Controller) Name() string {
 	return "nodeclass"
 }
 
-func (c *NodeClassController) Builder(_ context.Context, m manager.Manager) corecontroller.Builder {
+func (c *Controller) Builder(_ context.Context, m manager.Manager) corecontroller.Builder {
 	return corecontroller.Adapt(controllerruntime.
 		NewControllerManagedBy(m).
 		For(&v1beta1.EC2NodeClass{}).
