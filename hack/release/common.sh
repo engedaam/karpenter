@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GITHUB_ACCOUNT="aws"
+AWS_ACCOUNT_ID="605559265918"
 ECR_GALLERY_NAME="karpenter"
-RELEASE_REPO_ECR="${RELEASE_REPO_ECR:-public.ecr.aws/${ECR_GALLERY_NAME}/}"
+RELEASE_REPO_ECR=${RELEASE_REPO_ECR:-public.ecr.aws/${ECR_GALLERY_NAME}/}
+RELEASE_REPO_GH=${RELEASE_REPO_GH:-ghcr.io/${GITHUB_ACCOUNT}/karpenter/karp}
 
-SNAPSHOT_ECR="021119463062.dkr.ecr.us-east-1.amazonaws.com"
-SNAPSHOT_REPO_ECR="${SNAPSHOT_REPO_ECR:-${SNAPSHOT_ECR}/karpenter/snapshot/}"
-
+SNAPSHOT_ECR="${AWS_ACCOUNT_ID}.dkr.ecr.us-west-2.amazonaws.com"
+SNAPSHOT_REPO_ECR=${SNAPSHOT_REPO_ECR:-${SNAPSHOT_ECR}/karpenter/snapshot/}
 CURRENT_MAJOR_VERSION="0"
 
 snapshot() {
@@ -42,11 +44,11 @@ Helm Chart Version ${helm_chart_version}"
 }
 
 authenticate() {
-  aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${RELEASE_REPO_ECR}"
+  aws ecr-public get-login-password --region us-west-2 | docker login --username AWS --password-stdin "${RELEASE_REPO_ECR}"
 }
 
 authenticatePrivateRepo() {
-  aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "${SNAPSHOT_ECR}"
+  aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin ${SNAPSHOT_ECR}
 }
 
 build() {
