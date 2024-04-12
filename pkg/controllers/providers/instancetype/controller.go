@@ -12,7 +12,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package instancetypes
+package instancetype
 
 import (
 	"context"
@@ -35,8 +35,7 @@ func NewController(instancetypeProvider instancetype.Provider) *Controller {
 }
 
 func (c *Controller) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
-
-	return reconcile.Result{RequeueAfter: awscache.InstanceTypesAndZonesTTL}, nil
+	return reconcile.Result{RequeueAfter: awscache.InstanceTypesAndZonesTTL}, c.instancetypeProvider.UpdateInstanceTypes(ctx)
 }
 
 func (c *Controller) Name() string {
