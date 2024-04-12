@@ -34,13 +34,14 @@ import (
 
 type Provider interface {
 	List(context.Context, *v1beta1.EC2NodeClass) ([]*ec2.SecurityGroup, error)
+	Update(context.Context, *v1beta1.EC2NodeClass) error
 }
 
 type DefaultProvider struct {
 	sync.Mutex
-	ec2api ec2iface.EC2API
-	cache  *cache.Cache
-	cm     *pretty.ChangeMonitor
+	ec2api        ec2iface.EC2API
+	securityGroup map[string][]*ec2.SecurityGroup
+	cm            *pretty.ChangeMonitor
 }
 
 func NewDefaultProvider(ec2api ec2iface.EC2API, cache *cache.Cache) *DefaultProvider {
@@ -48,50 +49,53 @@ func NewDefaultProvider(ec2api ec2iface.EC2API, cache *cache.Cache) *DefaultProv
 		ec2api: ec2api,
 		cm:     pretty.NewChangeMonitor(),
 		// TODO: Remove cache cache when we utilize the security groups from the EC2NodeClass.status
-		cache: cache,
+		securityGroup: map[string][]*ec2.SecurityGroup{},
 	}
 }
 
 func (p *DefaultProvider) List(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) ([]*ec2.SecurityGroup, error) {
-	p.Lock()
-	defer p.Unlock()
-
-	// Get SecurityGroups
 	filterSets := getFilterSets(nodeClass.Spec.SecurityGroupSelectorTerms)
-	securityGroups, err := p.getSecurityGroups(ctx, filterSets)
-	if err != nil {
-		return nil, err
+	securityGroups, ok := p.securityGroup[p.securityGroupCacheKey(filterSets)]
+	if !ok {
+		return []*ec2.SecurityGroup{}, nil
 	}
-	if p.cm.HasChanged(fmt.Sprintf("security-groups/%s", nodeClass.Name), securityGroups) {
-		logging.FromContext(ctx).
-			With("security-groups", lo.Map(securityGroups, func(s *ec2.SecurityGroup, _ int) string {
-				return aws.StringValue(s.GroupId)
-			})).
-			Debugf("discovered security groups")
-	}
+
 	return securityGroups, nil
 }
 
-func (p *DefaultProvider) getSecurityGroups(ctx context.Context, filterSets [][]*ec2.Filter) ([]*ec2.SecurityGroup, error) {
-	hash, err := hashstructure.Hash(filterSets, hashstructure.FormatV2, &hashstructure.HashOptions{SlicesAsSets: true})
-	if err != nil {
-		return nil, err
-	}
-	if sg, ok := p.cache.Get(fmt.Sprint(hash)); ok {
-		return sg.([]*ec2.SecurityGroup), nil
-	}
+func (p *DefaultProvider) Update(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) error {
+	p.Lock()
+	defer p.Unlock()
+
+	filterSets := getFilterSets(nodeClass.Spec.SecurityGroupSelectorTerms)
 	securityGroups := map[string]*ec2.SecurityGroup{}
 	for _, filters := range filterSets {
 		output, err := p.ec2api.DescribeSecurityGroupsWithContext(ctx, &ec2.DescribeSecurityGroupsInput{Filters: filters})
 		if err != nil {
-			return nil, fmt.Errorf("describing security groups %+v, %w", filterSets, err)
+			return fmt.Errorf("describing security groups %+v, %w", filterSets, err)
 		}
 		for i := range output.SecurityGroups {
 			securityGroups[lo.FromPtr(output.SecurityGroups[i].GroupId)] = output.SecurityGroups[i]
 		}
 	}
-	p.cache.SetDefault(fmt.Sprint(hash), lo.Values(securityGroups))
-	return lo.Values(securityGroups), nil
+	p.securityGroup[p.securityGroupCacheKey(filterSets)] = lo.Values(securityGroups)
+	if p.cm.HasChanged(fmt.Sprintf("security-groups/%s", nodeClass.Name), securityGroups) {
+		logging.FromContext(ctx).
+			With("security-groups", lo.Map(lo.Values(securityGroups), func(s *ec2.SecurityGroup, _ int) string {
+				return aws.StringValue(s.GroupId)
+			})).
+			Debugf("discovered security groups")
+	}
+	return nil
+}
+
+func (p *DefaultProvider) securityGroupCacheKey(filterSets [][]*ec2.Filter) string {
+	hash, err := hashstructure.Hash(filterSets, hashstructure.FormatV2, &hashstructure.HashOptions{SlicesAsSets: true})
+	if err != nil {
+		panic(fmt.Sprintf("hashing security group filters, %s", err))
+	}
+
+	return fmt.Sprint(hash)
 }
 
 func getFilterSets(terms []v1beta1.SecurityGroupSelectorTerm) (res [][]*ec2.Filter) {

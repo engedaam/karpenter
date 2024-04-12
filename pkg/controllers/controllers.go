@@ -21,6 +21,8 @@ import (
 
 	controllersinstancetype "github.com/aws/karpenter-provider-aws/pkg/controllers/providers/instancetype"
 	controllerspricing "github.com/aws/karpenter-provider-aws/pkg/controllers/providers/pricing"
+	controllerssecuritygroup "github.com/aws/karpenter-provider-aws/pkg/controllers/providers/securitygroup"
+	controllerssubnet "github.com/aws/karpenter-provider-aws/pkg/controllers/providers/subnet"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/instancetype"
 	"github.com/aws/karpenter-provider-aws/pkg/providers/launchtemplate"
 
@@ -59,6 +61,8 @@ func NewControllers(ctx context.Context, sess *session.Session, clk clock.Clock,
 		nodeclaimtagging.NewController(kubeClient, instanceProvider),
 		controllerspricing.NewController(pricingProvider),
 		controllersinstancetype.NewController(instanceTypesProvider),
+		controllerssubnet.NewController(kubeClient, subnetProvider),
+		controllerssecuritygroup.NewController(kubeClient, securityGroupProvider),
 	}
 	if options.FromContext(ctx).InterruptionQueue != "" {
 		controllers = append(controllers, interruption.NewController(kubeClient, clk, recorder, lo.Must(sqs.NewProvider(ctx, servicesqs.New(sess), options.FromContext(ctx).InterruptionQueue)), unavailableOfferings))

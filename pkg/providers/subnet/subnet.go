@@ -69,8 +69,7 @@ func (p *DefaultProvider) List(ctx context.Context, nodeClass *v1beta1.EC2NodeCl
 	if len(filterSets) == 0 {
 		return []*ec2.Subnet{}, nil
 	}
-	cacheKey := p.subnetCacheKey(filterSets)
-	subnets, ok := p.subnets[cacheKey]
+	subnets, ok := p.subnets[p.subnetCacheKey(filterSets)]
 	if !ok {
 		return nil, fmt.Errorf("no subnets found")
 	}
@@ -82,10 +81,6 @@ func (p *DefaultProvider) Update(ctx context.Context, nodeClass *v1beta1.EC2Node
 	defer p.Unlock()
 
 	filterSets := getFilterSets(nodeClass.Spec.SubnetSelectorTerms)
-	if len(filterSets) == 0 {
-		return nil
-	}
-	cacheKey := p.subnetCacheKey(filterSets)
 
 	// Ensure that all the subnets that are returned here are unique
 	subnets := map[string]*ec2.Subnet{}
@@ -99,7 +94,7 @@ func (p *DefaultProvider) Update(ctx context.Context, nodeClass *v1beta1.EC2Node
 			delete(p.inflightIPs, lo.FromPtr(output.Subnets[i].SubnetId)) // remove any previously tracked IP addresses since we just refreshed from EC2
 		}
 	}
-	p.subnets[cacheKey] = lo.Values(subnets)
+	p.subnets[p.subnetCacheKey(filterSets)] = lo.Values(subnets)
 	if p.cm.HasChanged(fmt.Sprintf("subnets/%s", nodeClass.Name), subnets) {
 		logging.FromContext(ctx).
 			With("subnets", lo.Map(lo.Values(subnets), func(s *ec2.Subnet, _ int) string {

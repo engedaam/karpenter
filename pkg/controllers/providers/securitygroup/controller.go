@@ -12,14 +12,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package subnet
+package securitygroup
 
 import (
 	"context"
 
 	"github.com/aws/karpenter-provider-aws/pkg/apis/v1beta1"
 	awscache "github.com/aws/karpenter-provider-aws/pkg/cache"
-	"github.com/aws/karpenter-provider-aws/pkg/providers/subnet"
+	"github.com/aws/karpenter-provider-aws/pkg/providers/securitygroup"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -27,14 +27,14 @@ import (
 )
 
 type Controller struct {
-	kubeClient     client.Client
-	subnetProvider subnet.Provider
+	kubeClient            client.Client
+	securityGroupProvider securitygroup.Provider
 }
 
-func NewController(kubeClient client.Client, subnetProvider subnet.Provider) *Controller {
+func NewController(kubeClient client.Client, securityGroupProvider securitygroup.Provider) *Controller {
 	return &Controller{
-		kubeClient:     kubeClient,
-		subnetProvider: subnetProvider,
+		kubeClient:            kubeClient,
+		securityGroupProvider: securityGroupProvider,
 	}
 }
 
@@ -45,7 +45,7 @@ func (c *Controller) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 
 	for i := range nodeClassList.Items {
-		if err := c.subnetProvider.Update(ctx, &nodeClassList.Items[i]); err != nil {
+		if err := c.securityGroupProvider.Update(ctx, &nodeClassList.Items[i]); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -54,7 +54,7 @@ func (c *Controller) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 }
 
 func (c *Controller) Name() string {
-	return "subnet"
+	return "securitygroup"
 }
 
 func (c *Controller) Builder(_ context.Context, m manager.Manager) controller.Builder {
