@@ -52,7 +52,7 @@ const (
 type Provider interface {
 	LivenessProbe(*http.Request) error
 	List(context.Context, *corev1beta1.KubeletConfiguration, *v1beta1.EC2NodeClass) ([]*cloudprovider.InstanceType, error)
-	UpdateInstanceTypes(ctx context.Context) error
+	Update(ctx context.Context) error
 }
 
 type DefaultProvider struct {
@@ -175,7 +175,7 @@ func (p *DefaultProvider) LivenessProbe(req *http.Request) error {
 	return p.pricingProvider.LivenessProbe(req)
 }
 
-func (p *DefaultProvider) UpdateInstanceTypes(ctx context.Context) error {
+func (p *DefaultProvider) Update(ctx context.Context) error {
 	// Hydrate InstanceTypes from EC2
 	if err := p.updateInstanceTypes(ctx); err != nil {
 		return err

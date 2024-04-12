@@ -41,12 +41,13 @@ type Provider interface {
 	CheckAnyPublicIPAssociations(context.Context, *v1beta1.EC2NodeClass) (bool, error)
 	ZonalSubnetsForLaunch(context.Context, *v1beta1.EC2NodeClass, []*cloudprovider.InstanceType, string) (map[string]*ec2.Subnet, error)
 	UpdateInflightIPs(*ec2.CreateFleetInput, *ec2.CreateFleetOutput, []*cloudprovider.InstanceType, []*ec2.Subnet, string)
+	Update(context.Context, *v1beta1.EC2NodeClass) error
 }
 
 type DefaultProvider struct {
 	sync.RWMutex
 	ec2api      ec2iface.EC2API
-	cache       *cache.Cache
+	subnets     map[string][]*ec2.Subnet
 	cm          *pretty.ChangeMonitor
 	inflightIPs map[string]int64
 }
@@ -57,40 +58,48 @@ func NewDefaultProvider(ec2api ec2iface.EC2API, cache *cache.Cache) *DefaultProv
 		cm:     pretty.NewChangeMonitor(),
 		// TODO: Remove cache when we utilize the resolved subnets from the EC2NodeClass.status
 		// Subnets are sorted on AvailableIpAddressCount, descending order
-		cache: cache,
+		subnets: map[string][]*ec2.Subnet{},
 		// inflightIPs is used to track IPs from known launched instances
 		inflightIPs: map[string]int64{},
 	}
 }
 
 func (p *DefaultProvider) List(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) ([]*ec2.Subnet, error) {
-	p.Lock()
-	defer p.Unlock()
 	filterSets := getFilterSets(nodeClass.Spec.SubnetSelectorTerms)
 	if len(filterSets) == 0 {
 		return []*ec2.Subnet{}, nil
 	}
-	hash, err := hashstructure.Hash(filterSets, hashstructure.FormatV2, &hashstructure.HashOptions{SlicesAsSets: true})
-	if err != nil {
-		return nil, err
+	cacheKey := p.subnetCacheKey(filterSets)
+	subnets, ok := p.subnets[cacheKey]
+	if !ok {
+		return nil, fmt.Errorf("no subnets found")
 	}
-	if subnets, ok := p.cache.Get(fmt.Sprint(hash)); ok {
-		return subnets.([]*ec2.Subnet), nil
+	return subnets, nil
+}
+
+func (p *DefaultProvider) Update(ctx context.Context, nodeClass *v1beta1.EC2NodeClass) error {
+	p.Lock()
+	defer p.Unlock()
+
+	filterSets := getFilterSets(nodeClass.Spec.SubnetSelectorTerms)
+	if len(filterSets) == 0 {
+		return nil
 	}
+	cacheKey := p.subnetCacheKey(filterSets)
 
 	// Ensure that all the subnets that are returned here are unique
 	subnets := map[string]*ec2.Subnet{}
 	for _, filters := range filterSets {
 		output, err := p.ec2api.DescribeSubnetsWithContext(ctx, &ec2.DescribeSubnetsInput{Filters: filters})
 		if err != nil {
-			return nil, fmt.Errorf("describing subnets %s, %w", pretty.Concise(filters), err)
+			return fmt.Errorf("describing subnets %s, %w", pretty.Concise(filters), err)
 		}
 		for i := range output.Subnets {
 			subnets[lo.FromPtr(output.Subnets[i].SubnetId)] = output.Subnets[i]
 			delete(p.inflightIPs, lo.FromPtr(output.Subnets[i].SubnetId)) // remove any previously tracked IP addresses since we just refreshed from EC2
 		}
 	}
-	p.cache.SetDefault(fmt.Sprint(hash), lo.Values(subnets))
+	p.subnets[cacheKey] = lo.Values(subnets)
 	if p.cm.HasChanged(fmt.Sprintf("subnets/%s", nodeClass.Name), subnets) {
 		logging.FromContext(ctx).
 			With("subnets", lo.Map(lo.Values(subnets), func(s *ec2.Subnet, _ int) string {
@@ -98,7 +107,16 @@ func (p *DefaultProvider) List(ctx context.Context, nodeClass *v1beta1.EC2NodeCl
 			})).
 			Debugf("discovered subnets")
 	}
-	return lo.Values(subnets), nil
+	return nil
+}
+
+func (p *DefaultProvider) subnetCacheKey(filterSets [][]*ec2.Filter) string {
+	hash, err := hashstructure.Hash(filterSets, hashstructure.FormatV2, &hashstructure.HashOptions{SlicesAsSets: true})
+	if err != nil {
+		panic(fmt.Sprintf("hashing subnet filters, %s", err))
+	}
+
+	return fmt.Sprint(hash)
 }
 
 // CheckAnyPublicIPAssociations returns a bool indicating whether all referenced subnets assign public IPv4 addresses to EC2 instances created therein
@@ -183,8 +201,8 @@ func (p *DefaultProvider) UpdateInflightIPs(createFleetInput *ec2.CreateFleetInp
 	subnetIDsToAddBackIPs, _ := lo.Difference(fleetInputSubnets, fleetOutputSubnets)
 
 	// Aggregate all the cached subnets
-	cachedSubnets := lo.UniqBy(lo.Flatten(lo.MapToSlice(p.cache.Items(), func(_ string, item cache.Item) []*ec2.Subnet {
-		return item.Object.([]*ec2.Subnet)
+	cachedSubnets := lo.UniqBy(lo.Flatten(lo.MapToSlice(p.subnets, func(_ string, item []*ec2.Subnet) []*ec2.Subnet {
+		return item
 	})), func(subnet *ec2.Subnet) string { return *subnet.SubnetId })
 
 	// Update the inflight IP tracking of subnets stored in the cache that have not be synchronized since the initial
