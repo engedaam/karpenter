@@ -18,7 +18,8 @@ HELM_OPTS ?= --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=${K
 			--set controller.resources.limits.cpu=1 \
 			--set controller.resources.limits.memory=1Gi \
 			--set settings.featureGates.spotToSpotConsolidation=true \
-			--create-namespace
+			--set webhook.enabled=true \
+			--create-namespace 
 
 # CR for local builds of Karpenter
 KARPENTER_NAMESPACE ?= kube-system
@@ -46,10 +47,12 @@ run: ## Run Karpenter controller binary against your local cluster
 	SYSTEM_NAMESPACE=${KARPENTER_NAMESPACE} \
 		KUBERNETES_MIN_VERSION="1.19.0-0" \
 		LEADER_ELECT=false \
-		DISABLE_WEBHOOK=true \
+		DISABLE_WEBHOOK=false \
 		CLUSTER_NAME=${CLUSTER_NAME} \
 		INTERRUPTION_QUEUE=${CLUSTER_NAME} \
 		FEATURE_GATES="Drift=true" \
+		KARPENTER_SERVICE="karpenter" \
+		LOG_LEVEL="debug" \
 		go run ./cmd/controller/main.go
 
 test: ## Run tests
@@ -129,7 +132,7 @@ image: ## Build the Karpenter controller images using ko build
 	$(eval IMG_DIGEST=$(shell echo $(CONTROLLER_IMG) | cut -d "@" -f 2))
 
 apply: verify image ## Deploy the controller from the current state of your git repository into your ~/.kube/config cluster
-	kubectl apply -f ./pkg/apis/crds/
+	# kubectl apply -f ./pkg/apis/crds/
 	helm upgrade --install karpenter charts/karpenter --namespace ${KARPENTER_NAMESPACE} \
         $(HELM_OPTS) \
         --set logLevel=debug \
