@@ -128,8 +128,6 @@ func NewEnvironment(ctx context.Context, env *coretest.Environment) *Environment
 			ec2api,
 			eksapi,
 			amiResolver,
-			securityGroupProvider,
-			subnetProvider,
 			lo.ToPtr("ca-bundle"),
 			make(chan struct{}),
 			net.ParseIP("10.0.100.10"),

@@ -150,8 +150,6 @@ func NewOperator(ctx context.Context, operator *operator.Operator) (context.Cont
 		ec2api,
 		eks.New(sess),
 		amiResolver,
-		securityGroupProvider,
-		subnetProvider,
 		lo.Must(GetCABundle(ctx, operator.GetConfig())),
 		operator.Elected(),
 		kubeDNSIP,

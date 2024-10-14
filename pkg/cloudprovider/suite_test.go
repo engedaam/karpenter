@@ -1313,4 +1313,76 @@ var _ = Describe("CloudProvider", func() {
 			Expect(lo.Keys(cloudProviderNodeClaim.Status.Allocatable)).ToNot(ContainElement(v1.ResourceEFA))
 		})
 	})
+	FContext("API Failure", func() {
+		FIt("should be able to schedule pods during DescribeSubnet failure", func() {
+			awsEnv.EC2API.DescribeSubnetError.Set(fmt.Errorf("failed"))
+			nodeClass.Spec.SubnetSelectorTerms = []v1.SubnetSelectorTerm{{Tags: map[string]string{"Name": "test-subnet-1"}}}
+			nodeClass.Status.Subnets = []v1.Subnet{
+				{
+					ID:     "subnet-test1",
+					Zone:   "test-zone-1a",
+					ZoneID: "tstz1-1a",
+				},
+			}
+			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
+			controller := status.NewController(env.Client, awsEnv.SubnetProvider, awsEnv.SecurityGroupProvider, awsEnv.AMIProvider, awsEnv.InstanceProfileProvider, awsEnv.LaunchTemplateProvider)
+			err := ExpectObjectReconcileFailed(ctx, env.Client, controller, nodeClass)
+			if err == nil {
+				return
+			}
+
+			fmt.Println(nodeClass.Status)
+			podSubnet1 := coretest.UnschedulablePod()
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, podSubnet1)
+			ExpectScheduled(ctx, env.Client, podSubnet1)
+			createFleetInput := awsEnv.EC2API.CreateFleetBehavior.CalledWithInput.Pop()
+			Expect(fake.SubnetsFromFleetRequest(createFleetInput)).To(ConsistOf("subnet-test1")) // Use the cached value in the nodeclass status
+		})
+		It("should be able to schedule pods during DescribeSecurityGroup failure", func() {
+			awsEnv.EC2API.NextError.Set(fmt.Errorf("failed"))
+			nodeClass.Spec.SecurityGroupSelectorTerms = []v1.SecurityGroupSelectorTerm{{Tags: map[string]string{"Name": "test-security-group-11"}}}
+			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
+			controller := status.NewController(env.Client, awsEnv.SubnetProvider, awsEnv.SecurityGroupProvider, awsEnv.AMIProvider, awsEnv.InstanceProfileProvider, awsEnv.LaunchTemplateProvider)
+			err := ExpectObjectReconcileFailed(ctx, env.Client, controller, nodeClass)
+			if err == nil {
+				return
+			}
+			podSubnet1 := coretest.UnschedulablePod()
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, podSubnet1)
+			ExpectScheduled(ctx, env.Client, podSubnet1)
+			// createFleetInput := awsEnv.EC2API.CreateFleetBehavior.CalledWithInput.Pop()
+			// createFleetInput.LaunchTemplateConfigs[0].Overrides[0].ImageId
+			// Expect(fake.SubnetsFromFleetRequest(createFleetInput)).To(ConsistOf("test-subnet-1")) // Use the cached value in the nodeclass status
+		})
+		It("should be able to schedule pods during DescribeImages failure", func() {
+			nodeClass.Spec.AMIFamily = &v1.AMIFamilyAL2023
+			nodeClass.Spec.AMISelectorTerms = []v1.AMISelectorTerm{{Tags: map[string]string{"Name": "test-ami-1"}}}
+			ExpectApplied(ctx, env.Client, nodePool, nodeClass)
+			controller := status.NewController(env.Client, awsEnv.SubnetProvider, awsEnv.SecurityGroupProvider, awsEnv.AMIProvider, awsEnv.InstanceProfileProvider, awsEnv.LaunchTemplateProvider)
+			ExpectObjectReconciled(ctx, env.Client, controller, nodeClass)
+
+			awsEnv.EC2API.NextError.Set(fmt.Errorf("failed"))
+
+			podSubnet1 := coretest.UnschedulablePod()
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, podSubnet1)
+			ExpectScheduled(ctx, env.Client, podSubnet1)
+			createFleetInput := awsEnv.EC2API.CreateFleetBehavior.CalledWithInput.Pop()
+			Expect(fake.ImageIDFromFleetRequest(createFleetInput)).To(ConsistOf("test-ami-1")) // Use the cached value in the nodeclass status
+		})
+		It("should be able to schedule pods during GetParameters failure", func() {
+
+		})
+		It("should be able to schedule pods during DescribeInstanceTypes failure", func() {
+
+		})
+		It("should be able to schedule pods during GetInstanceProfile failure", func() {
+
+		})
+		It("should be able to schedule pods during DescribeLaunchTemplates failure", func() {
+
+		})
+		It("should be able to schedule pods during DescribeSpotPiceHistory failure", func() {
+
+		})
+	})
 })

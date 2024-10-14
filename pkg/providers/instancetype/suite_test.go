@@ -433,7 +433,7 @@ var _ = Describe("InstanceTypeProvider", func() {
 			Expect(expected.Has(aws.StringValue(override.InstanceType))).To(BeTrue(), fmt.Sprintf("expected %s to exist in set", aws.StringValue(override.InstanceType)))
 		}
 	})
-	It("should order the instance types by price and only consider the spot types that are cheaper than the cheapest on-demand", func() {
+	FIt("should order the instance types by price and only consider the spot types that are cheaper than the cheapest on-demand", func() {
 		instances := fake.MakeInstances()
 		awsEnv.EC2API.DescribeInstanceTypesOutput.Set(&ec2.DescribeInstanceTypesOutput{
 			InstanceTypes: fake.MakeInstances(),

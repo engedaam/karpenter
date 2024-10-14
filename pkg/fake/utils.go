@@ -85,6 +85,19 @@ func SubnetsFromFleetRequest(createFleetInput *ec2.CreateFleetInput) []string {
 	})))
 }
 
+// SubnetsFromFleetRequest returns a unique slice of subnetIDs passed as overrides from a CreateFleetInput
+func ImageIDFromFleetRequest(createFleetInput *ec2.CreateFleetInput) []string {
+	return lo.Uniq(lo.Flatten(lo.Map(createFleetInput.LaunchTemplateConfigs, func(ltReq *ec2.FleetLaunchTemplateConfigRequest, _ int) []string {
+		var subnets []string
+		for _, override := range ltReq.Overrides {
+			if override.ImageId != nil {
+				subnets = append(subnets, *override.ImageId)
+			}
+		}
+		return subnets
+	})))
+}
+
 // FilterDescribeSecurtyGroups filters the passed in security groups based on the filters passed in.
 // Filters are chained with a logical "AND"
 func FilterDescribeSecurtyGroups(sgs []*ec2.SecurityGroup, filters []*ec2.Filter) []*ec2.SecurityGroup {

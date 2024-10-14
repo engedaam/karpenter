@@ -65,6 +65,7 @@ type EC2Behavior struct {
 	LaunchTemplates                     sync.Map
 	InsufficientCapacityPools           atomic.Slice[CapacityPool]
 	NextError                           AtomicError
+	DescribeSubnetError                 AtomicError
 }
 
 type EC2API struct {
@@ -408,6 +409,10 @@ func (e *EC2API) DescribeSubnetsWithContext(_ context.Context, input *ec2.Descri
 	if !e.NextError.IsNil() {
 		defer e.NextError.Reset()
 		return nil, e.NextError.Get()
+	}
+	if !e.DescribeSubnetError.IsNil() {
+		defer e.DescribeSubnetError.Reset()
+		return nil, e.DescribeSubnetError.Get()
 	}
 	if !e.DescribeSubnetsOutput.IsNil() {
 		describeSubnetsOutput := e.DescribeSubnetsOutput.Clone()
