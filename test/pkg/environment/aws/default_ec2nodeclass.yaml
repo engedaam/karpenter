@@ -1,0 +1,15 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiFamily: AL2023
+  subnetSelectorTerms:
+    - tags: 
+        karpenter.sh/discovery: aengeda-karpenter-playground-us-west-2
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: aengeda-karpenter-playground-us-west-2
+  role: KarpenterNodeRole-aengeda-karpenter-playground-us-west-2
+  amiSelectorTerms:
+    - alias: al2023@latest

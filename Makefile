@@ -84,6 +84,19 @@ e2etests: ## Run the e2e suite against your local cluster
 		--ginkgo.grace-period=3m \
 		--ginkgo.vv
 
+upstream-e2etests:
+	go test \
+		-count 1 \
+		-timeout 1h \
+		-v \
+		$(KARPENTER_CORE_DIR)/test/suites/$(shell echo $(TEST_SUITE) | tr A-Z a-z)/... \
+		--ginkgo.focus="${FOCUS}" \
+		--ginkgo.timeout=1h \
+		--ginkgo.grace-period=5m \
+		--ginkgo.vv \
+		--default-nodeclass="$(shell pwd)/test/pkg/environment/aws/default_ec2nodeclass.yaml" \
+		--default-nodepool="$(shell pwd)/test/pkg/environment/aws/default_nodepool.yaml"
+
 e2etests-deflake: ## Run the e2e suite against your local cluster
 	cd test && CLUSTER_NAME=${CLUSTER_NAME} ginkgo \
 		--focus="${FOCUS}" \
