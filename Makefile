@@ -95,11 +95,11 @@ upstream-e2etests:
 	CLUSTER_NAME=${CLUSTER_NAME} envsubst < $(shell pwd)/test/pkg/environment/aws/default_ec2nodeclass.yaml > ${TMPFILE}
 	go test \
 		-count 1 \
-		-timeout 1h \
+		-timeout 3.25h \
 		-v \
-		$(KARPENTER_CORE_DIR)/test/suites/$(shell echo $(TEST_SUITE) | tr A-Z a-z)/... \
+		$(KARPENTER_CORE_DIR)/test/suites/... \
 		--ginkgo.focus="${FOCUS}" \
-		--ginkgo.timeout=1h \
+		--ginkgo.timeout=3h \
 		--ginkgo.grace-period=5m \
 		--ginkgo.vv \
 		--default-nodeclass="$(TMPFILE)"\
