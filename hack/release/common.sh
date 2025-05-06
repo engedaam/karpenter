@@ -4,7 +4,7 @@ set -euo pipefail
 ECR_GALLERY_NAME="karpenter"
 RELEASE_REPO_ECR="${RELEASE_REPO_ECR:-public.ecr.aws/${ECR_GALLERY_NAME}/}"
 
-SNAPSHOT_ECR="021119463062.dkr.ecr.us-east-1.amazonaws.com"
+SNAPSHOT_ECR="605559265918.dkr.ecr.us-east-1.amazonaws.com"
 SNAPSHOT_REPO_ECR="${SNAPSHOT_REPO_ECR:-${SNAPSHOT_ECR}/karpenter/snapshot/}"
 
 CURRENT_MAJOR_VERSION="0"
