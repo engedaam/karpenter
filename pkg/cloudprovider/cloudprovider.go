@@ -22,6 +22,7 @@ import (
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/awslabs/operatorpkg/status"
+	"go.uber.org/multierr"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -90,6 +91,11 @@ func New(
 // Create a NodeClaim given the constraints.
 func (c *CloudProvider) Create(ctx context.Context, nodeClaim *karpv1.NodeClaim) (*karpv1.NodeClaim, error) {
 	nodeClass, err := c.resolveNodeClassFromNodeClaim(ctx, nodeClaim)
+	if !nodeClass.DeletionTimestamp.IsZero() {
+		// For the purposes of NodeClass CloudProvider resolution, we treat deleting NodeClasses as NotFound,
+		// but we return a different error message to be clearer to users
+		err = multierr.Append(err, newTerminatingNodeClassError(nodeClass.Name))
+	}
 	if err != nil {
 		if errors.IsNotFound(err) {
 			// We treat a failure to resolve the NodeClass as an ICE since this means there is no capacity possibilities for this NodeClaim
@@ -312,11 +318,6 @@ func (c *CloudProvider) resolveNodeClassFromNodePool(ctx context.Context, nodePo
 	nodeClass := &v1.EC2NodeClass{}
 	if err := c.kubeClient.Get(ctx, types.NamespacedName{Name: nodePool.Spec.Template.Spec.NodeClassRef.Name}, nodeClass); err != nil {
 		return nil, err
-	}
-	if !nodeClass.DeletionTimestamp.IsZero() {
-		// For the purposes of NodeClass CloudProvider resolution, we treat deleting NodeClasses as NotFound,
-		// but we return a different error message to be clearer to users
-		return nil, newTerminatingNodeClassError(nodeClass.Name)
 	}
 	return nodeClass, nil
 }
